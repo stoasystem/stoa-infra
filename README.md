@@ -2,9 +2,7 @@
 
 AWS CDK v2 (Python) infrastructure for the STOA platform.
 
-## Region: `eu-central-2` (Zurich)
-
-> **Note:** `FrontendStack` deploys to `us-east-1` because CloudFront requires ACM certs in us-east-1.
+## Region: `eu-central-2` (Zurich) — 所有 Stack
 
 ## Stacks
 
@@ -17,7 +15,7 @@ AWS CDK v2 (Python) infrastructure for the STOA platform.
 | `StoaAiStack` | Bedrock / Rekognition (Phase 2 placeholder) |
 | `StoaNotificationStack` | SQS FIFO + SES + EventBridge Scheduler |
 | `StoaMonitoringStack` | CloudWatch Dashboard + Alarms |
-| `StoaFrontendStack` | S3 SPA + CloudFront (OAC) — us-east-1 |
+| `StoaFrontendStack` | S3 SPA + CloudFront (OAC) — eu-central-2 |
 
 ## Setup
 

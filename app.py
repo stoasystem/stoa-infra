@@ -51,8 +51,6 @@ monitoring = MonitoringStack(
     tags=tags,
 )
 
-# Frontend stack — CloudFront + S3; ACM cert must be in us-east-1
-frontend_env = cdk.Environment(account=env.account, region="us-east-1")
-frontend = FrontendStack(app, "StoaFrontendStack", env=frontend_env, tags=tags)
+frontend = FrontendStack(app, "StoaFrontendStack", env=env, tags=tags)
 
 app.synth()

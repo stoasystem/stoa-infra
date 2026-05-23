@@ -1,20 +1,16 @@
-"""S3 + CloudFront for React SPA — deployed in us-east-1 (ACM cert requirement)."""
+"""S3 + CloudFront for React SPA — deployed in eu-central-2 (Zurich)."""
 from aws_cdk import (
     Stack,
     RemovalPolicy,
     aws_s3 as s3,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
-    aws_certificatemanager as acm,
 )
 from constructs import Construct
 
 
 class FrontendStack(Stack):
-    """
-    Must deploy in us-east-1 because CloudFront only reads ACM certs from us-east-1.
-    Reference this stack from CDK App with env region='us-east-1'.
-    """
+    """S3 bucket + CloudFront distribution for the React SPA."""
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
