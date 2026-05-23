@@ -1,0 +1,13 @@
+[project]
+name = "stoa-infra"
+version = "0.1.0"
+description = "STOA AWS CDK infrastructure — eu-central-2 (Zurich)"
+requires-python = ">=3.12"
+dependencies = [
+    "aws-cdk-lib>=2.140.0",
+    "constructs>=10.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
