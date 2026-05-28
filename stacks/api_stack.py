@@ -123,10 +123,23 @@ class ApiStack(Stack):
                 integration=lambda_integration,
             )
 
-        # All other routes — require JWT
+        # OPTIONS /{proxy+} — no auth, allows CORS preflight for all paths
         http_api.add_routes(
             path="/{proxy+}",
-            methods=[apigwv2.HttpMethod.ANY],
+            methods=[apigwv2.HttpMethod.OPTIONS],
+            integration=lambda_integration,
+        )
+
+        # All other routes — require JWT (explicitly exclude OPTIONS so preflight passes)
+        http_api.add_routes(
+            path="/{proxy+}",
+            methods=[
+                apigwv2.HttpMethod.GET,
+                apigwv2.HttpMethod.POST,
+                apigwv2.HttpMethod.PUT,
+                apigwv2.HttpMethod.DELETE,
+                apigwv2.HttpMethod.PATCH,
+            ],
             integration=lambda_integration,
             authorizer=jwt_authorizer,
         )
