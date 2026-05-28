@@ -37,7 +37,6 @@ jobs:
         run: |
           pip install uv
           uv sync
-        working-directory: stoa-infra
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -48,7 +47,6 @@ jobs:
       - name: CDK Diff
         id: diff
         run: cdk diff --all 2>&1 | tee /tmp/cdk-diff.txt || true
-        working-directory: stoa-infra
 
       - name: Comment diff on PR
         if: github.event_name == 'pull_request'
@@ -92,7 +90,6 @@ jobs:
         run: |
           pip install uv
           uv sync
-        working-directory: stoa-infra
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -102,4 +99,3 @@ jobs:
 
       - name: CDK Deploy (all stacks)
         run: cdk deploy --all --require-approval never
-        working-directory: stoa-infra
