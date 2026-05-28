@@ -57,7 +57,7 @@ class ApiStack(Stack):
                 "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
                 "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                 "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
-                "BEDROCK_MODEL_ID": "anthropic.claude-haiku-20240307-v1:0",
+                "BEDROCK_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
             },
         )
 
