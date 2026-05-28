@@ -15,10 +15,19 @@ jobs:
   diff:
     name: CDK Diff (preview changes)
     runs-on: ubuntu-latest
-    # Run on both PR and push so we always see what changes
     steps:
-      - name: Checkout
+      - name: Checkout stoa-infra
         uses: actions/checkout@v4
+        with:
+          path: stoa-infra
+
+      # CDK references ../stoa-backend/dist for Lambda code
+      - name: Checkout stoa-backend
+        uses: actions/checkout@v4
+        with:
+          repository: stoasystem/stoa-backend
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: stoa-backend
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -33,7 +42,22 @@ jobs:
       - name: Install CDK CLI
         run: npm install -g aws-cdk
 
-      - name: Install Python dependencies
+      - name: Build Lambda dist (linux arm64)
+        working-directory: stoa-backend
+        run: |
+          pip install uv
+          rm -rf dist
+          pip install \
+            --platform manylinux2014_aarch64 \
+            --implementation cp \
+            --python-version 3.12 \
+            --only-binary :all: \
+            --target dist \
+            -r requirements.txt
+          cp -r src/stoa dist/stoa
+
+      - name: Install CDK Python dependencies
+        working-directory: stoa-infra
         run: |
           pip install uv
           uv sync
@@ -46,6 +70,7 @@ jobs:
 
       - name: CDK Diff
         id: diff
+        working-directory: stoa-infra
         run: cdk diff --all 2>&1 | tee /tmp/cdk-diff.txt || true
 
       - name: Comment diff on PR
@@ -70,8 +95,17 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout
+      - name: Checkout stoa-infra
         uses: actions/checkout@v4
+        with:
+          path: stoa-infra
+
+      - name: Checkout stoa-backend
+        uses: actions/checkout@v4
+        with:
+          repository: stoasystem/stoa-backend
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: stoa-backend
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -86,7 +120,22 @@ jobs:
       - name: Install CDK CLI
         run: npm install -g aws-cdk
 
-      - name: Install Python dependencies
+      - name: Build Lambda dist (linux arm64)
+        working-directory: stoa-backend
+        run: |
+          pip install uv
+          rm -rf dist
+          pip install \
+            --platform manylinux2014_aarch64 \
+            --implementation cp \
+            --python-version 3.12 \
+            --only-binary :all: \
+            --target dist \
+            -r requirements.txt
+          cp -r src/stoa dist/stoa
+
+      - name: Install CDK Python dependencies
+        working-directory: stoa-infra
         run: |
           pip install uv
           uv sync
@@ -98,4 +147,5 @@ jobs:
           aws-region: eu-central-2
 
       - name: CDK Deploy (all stacks)
+        working-directory: stoa-infra
         run: cdk deploy --all --require-approval never
