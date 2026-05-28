@@ -76,6 +76,18 @@ class ApiStack(Stack):
             resources=["*"],
         ))
 
+        # Cognito admin operations (register, login, /auth/me)
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "cognito-idp:AdminCreateUser",
+                "cognito-idp:AdminSetUserPassword",
+                "cognito-idp:AdminGetUser",
+                "cognito-idp:InitiateAuth",
+                "cognito-idp:GlobalSignOut",
+            ],
+            resources=[user_pool.user_pool_arn],
+        ))
+
         # HTTP API with Cognito JWT authorizer — accepts tokens from all 4 app clients
         jwt_authorizer = authorizers.HttpJwtAuthorizer(
             "CognitoAuthorizer",
