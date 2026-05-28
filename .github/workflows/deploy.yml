@@ -1,0 +1,105 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+  pull-requests: write  # allow posting cdk diff as PR comment
+
+jobs:
+  diff:
+    name: CDK Diff (preview changes)
+    runs-on: ubuntu-latest
+    # Run on both PR and push so we always see what changes
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js (for CDK CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install Python dependencies
+        run: |
+          pip install uv
+          uv sync
+        working-directory: stoa-infra
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::562923011260:role/stoa-github-infra-deploy
+          aws-region: eu-central-2
+
+      - name: CDK Diff
+        id: diff
+        run: cdk diff --all 2>&1 | tee /tmp/cdk-diff.txt || true
+        working-directory: stoa-infra
+
+      - name: Comment diff on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const diff = fs.readFileSync('/tmp/cdk-diff.txt', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## CDK Diff\n\`\`\`\n${diff.slice(0, 60000)}\n\`\`\``
+            });
+
+  deploy:
+    name: CDK Deploy
+    runs-on: ubuntu-latest
+    needs: diff
+    # Only deploy on push to main (not on PRs)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js (for CDK CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install Python dependencies
+        run: |
+          pip install uv
+          uv sync
+        working-directory: stoa-infra
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::562923011260:role/stoa-github-infra-deploy
+          aws-region: eu-central-2
+
+      - name: CDK Deploy (all stacks)
+        run: cdk deploy --all --require-approval never
+        working-directory: stoa-infra
