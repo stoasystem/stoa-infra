@@ -1,5 +1,6 @@
 """API Gateway HTTP API + Lambda (FastAPI/Mangum) + WAF."""
 from aws_cdk import (
+    CfnOutput,
     Stack,
     Duration,
     aws_lambda as lambda_,
@@ -11,7 +12,6 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_sqs as sqs,
     aws_iam as iam,
-    aws_wafv2 as wafv2,
 )
 from constructs import Construct
 
@@ -22,7 +22,10 @@ class ApiStack(Stack):
         scope: Construct,
         construct_id: str,
         user_pool: cognito.UserPool,
-        user_pool_client: cognito.UserPoolClient,
+        student_client: cognito.UserPoolClient,
+        parent_client: cognito.UserPoolClient,
+        teacher_client: cognito.UserPoolClient,
+        admin_client: cognito.UserPoolClient,
         table: dynamodb.Table,
         images_bucket: s3.Bucket,
         teacher_queue: sqs.Queue,
@@ -31,6 +34,9 @@ class ApiStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # Lambda function — FastAPI via Mangum
+        # The deployment package is pre-built by running:
+        #   cd stoa-backend && pip install -r requirements.txt -t dist/ && cp -r src/stoa dist/stoa
+        # This avoids requiring Docker during cdk deploy.
         self.api_function = lambda_.Function(
             self,
             "StoaApiFunction",
@@ -38,7 +44,7 @@ class ApiStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.main.handler",
-            code=lambda_.Code.from_asset("../backend/src"),
+            code=lambda_.Code.from_asset("../stoa-backend/dist"),
             memory_size=512,
             timeout=Duration.seconds(29),
             environment={
@@ -46,9 +52,11 @@ class ApiStack(Stack):
                 "DYNAMODB_TABLE_NAME": table.table_name,
                 "S3_IMAGES_BUCKET": images_bucket.bucket_name,
                 "TEACHER_QUEUE_URL": teacher_queue.queue_url,
-                "AWS_REGION_NAME": self.region,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
-                "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
+                "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
+                "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
                 "BEDROCK_MODEL_ID": "anthropic.claude-haiku-20240307-v1:0",
             },
         )
@@ -68,11 +76,16 @@ class ApiStack(Stack):
             resources=["*"],
         ))
 
-        # HTTP API with Cognito JWT authorizer
+        # HTTP API with Cognito JWT authorizer — accepts tokens from all 4 app clients
         jwt_authorizer = authorizers.HttpJwtAuthorizer(
             "CognitoAuthorizer",
             jwt_issuer=f"https://cognito-idp.{self.region}.amazonaws.com/{user_pool.user_pool_id}",
-            jwt_audience=[user_pool_client.user_pool_client_id],
+            jwt_audience=[
+                student_client.user_pool_client_id,
+                parent_client.user_pool_client_id,
+                teacher_client.user_pool_client_id,
+                admin_client.user_pool_client_id,
+            ],
         )
 
         http_api = apigwv2.HttpApi(
@@ -106,41 +119,9 @@ class ApiStack(Stack):
             authorizer=jwt_authorizer,
         )
 
-        # WAF — rate limiting + managed rule groups
-        waf = wafv2.CfnWebACL(
-            self,
-            "StoaWaf",
-            name="stoa-api-waf",
-            scope="REGIONAL",
-            default_action=wafv2.CfnWebACL.DefaultActionProperty(allow={}),
-            visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
-                cloud_watch_metrics_enabled=True,
-                metric_name="stoa-api-waf",
-                sampled_requests_enabled=True,
-            ),
-            rules=[
-                wafv2.CfnWebACL.RuleProperty(
-                    name="RateLimitPerIP",
-                    priority=1,
-                    action=wafv2.CfnWebACL.RuleActionProperty(block={}),
-                    statement=wafv2.CfnWebACL.StatementProperty(
-                        rate_based_statement=wafv2.CfnWebACL.RateBasedStatementProperty(
-                            limit=500,
-                            aggregate_key_type="IP",
-                        )
-                    ),
-                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
-                        cloud_watch_metrics_enabled=True,
-                        metric_name="RateLimitPerIP",
-                        sampled_requests_enabled=True,
-                    ),
-                ),
-            ],
-        )
+        # WAF note: HTTP API v2 does not support direct WAF WebACL association.
+        # WAF protection is applied at the CloudFront layer in FrontendStack (Phase 2).
+        # Rate limiting is enforced by API Gateway throttling settings per stage.
 
-        wafv2.CfnWebACLAssociation(
-            self,
-            "WafAssociation",
-            resource_arn=http_api.api_endpoint,
-            web_acl_arn=waf.attr_arn,
-        )
+        self.api_url = http_api.url
+        CfnOutput(self, "ApiUrl", value=http_api.url or "", description="STOA API base URL")

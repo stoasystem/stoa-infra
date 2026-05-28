@@ -14,7 +14,7 @@ from stacks.frontend_stack import FrontendStack
 app = cdk.App()
 
 env = cdk.Environment(
-    account=app.node.try_get_context("account") or "123456789012",
+    account=app.node.try_get_context("account") or "562923011260",
     region="eu-central-2",
 )
 
@@ -35,7 +35,10 @@ api = ApiStack(
     app,
     "StoaApiStack",
     user_pool=auth.user_pool,
-    user_pool_client=auth.student_client,
+    student_client=auth.student_client,
+    parent_client=auth.parent_client,
+    teacher_client=auth.teacher_client,
+    admin_client=auth.admin_client,
     table=database.table,
     images_bucket=storage.images_bucket,
     teacher_queue=notification.teacher_queue,

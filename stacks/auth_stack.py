@@ -1,5 +1,6 @@
 """Cognito User Pool with four App Clients (student, parent, teacher, admin)."""
 from aws_cdk import (
+    Duration,
     Stack,
     RemovalPolicy,
     aws_cognito as cognito,
@@ -26,17 +27,11 @@ class AuthStack(Stack):
             ),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
             removal_policy=RemovalPolicy.RETAIN,
-        )
-
-        # Custom attributes for role and grade
-        self.user_pool.add_custom_attribute(
-            "role", cognito.StringAttribute(mutable=False)
-        )
-        self.user_pool.add_custom_attribute(
-            "grade", cognito.StringAttribute(mutable=True)
-        )
-        self.user_pool.add_custom_attribute(
-            "subscription_tier", cognito.StringAttribute(mutable=True)
+            custom_attributes={
+                "role": cognito.StringAttribute(mutable=False),
+                "grade": cognito.StringAttribute(mutable=True),
+                "subscription_tier": cognito.StringAttribute(mutable=True),
+            },
         )
 
         # One App Client per role for fine-grained scope control
@@ -51,16 +46,6 @@ class AuthStack(Stack):
             user_pool_client_name=f"stoa-{role}",
             auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
             prevent_user_existence_errors=True,
-            access_token_validity=cdk_duration_hours(1),
-            refresh_token_validity=cdk_duration_days(30),
+            access_token_validity=Duration.hours(1),
+            refresh_token_validity=Duration.days(30),
         )
-
-
-def cdk_duration_hours(h: int):
-    from aws_cdk import Duration
-    return Duration.hours(h)
-
-
-def cdk_duration_days(d: int):
-    from aws_cdk import Duration
-    return Duration.days(d)
