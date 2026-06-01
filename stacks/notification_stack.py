@@ -40,7 +40,7 @@ class NotificationStack(Stack):
         ses.EmailIdentity(
             self,
             "StoaEmailIdentity",
-            identity=ses.Identity.domain("stoa.ch"),
+            identity=ses.Identity.domain("stoaedu.ch"),
         )
 
         # EventBridge Scheduler — every Monday 06:00 UTC+1 (05:00 UTC)
