@@ -82,6 +82,7 @@ class ApiStack(Stack):
                 "cognito-idp:AdminCreateUser",
                 "cognito-idp:AdminSetUserPassword",
                 "cognito-idp:AdminGetUser",
+                "cognito-idp:AdminAddUserToGroup",
                 "cognito-idp:InitiateAuth",
                 "cognito-idp:GlobalSignOut",
             ],
