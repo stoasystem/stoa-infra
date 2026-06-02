@@ -11,6 +11,10 @@ permissions:
   contents: read
   pull-requests: write  # allow posting cdk diff as PR comment
 
+env:
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "10"
+
 jobs:
   diff:
     name: CDK Diff (preview changes)
@@ -37,7 +41,7 @@ jobs:
       - name: Setup Node.js (for CDK CLI)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -115,7 +119,7 @@ jobs:
       - name: Setup Node.js (for CDK CLI)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -148,4 +152,15 @@ jobs:
 
       - name: CDK Deploy (all stacks)
         working-directory: stoa-infra
-        run: cdk deploy --all --require-approval never
+        run: |
+          for attempt in 1 2 3; do
+            echo "CDK deploy attempt ${attempt}/3"
+            if cdk deploy --all --require-approval never; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "CDK deploy failed after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
