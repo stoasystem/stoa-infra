@@ -2,6 +2,7 @@
 from aws_cdk import (
     Stack,
     Duration,
+    RemovalPolicy,
     aws_sqs as sqs,
     aws_ses as ses,
     aws_scheduler as scheduler,
@@ -34,12 +35,14 @@ class NotificationStack(Stack):
             dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=3, queue=dlq),
         )
 
-        # SES email identity — configure DNS in Route53 separately
-        ses.EmailIdentity(
+        # Keep the CloudFormation-managed identity aligned with the deployed stack.
+        # stoaedu.ch already exists in SES outside this stack and is used by the app.
+        email_identity = ses.EmailIdentity(
             self,
             "StoaEmailIdentity",
-            identity=ses.Identity.domain("stoaedu.ch"),
+            identity=ses.Identity.domain("stoa.ch"),
         )
+        email_identity.apply_removal_policy(RemovalPolicy.RETAIN)
 
         # EventBridge Scheduler — every Monday 06:00 UTC+1 (05:00 UTC)
         # The target Lambda ARN is injected after ApiStack deploys
