@@ -94,6 +94,26 @@ class ApiStack(Stack):
         table.grant_read_write_data(self.weekly_report_function)
         reports_bucket.grant_read_write(self.weekly_report_function)
 
+        iam.CfnPolicy(
+            self,
+            "GithubBackendLambdaUpdatePolicy",
+            policy_name="stoa-github-backend-lambda-update",
+            roles=["stoa-github-backend-deploy"],
+            policy_document={
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": "lambda:UpdateFunctionCode",
+                        "Resource": [
+                            self.api_function.function_arn,
+                            self.weekly_report_function.function_arn,
+                        ],
+                    }
+                ],
+            },
+        )
+
         # Bedrock & Rekognition permissions
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["bedrock:InvokeModel"],
