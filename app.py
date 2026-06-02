@@ -41,6 +41,7 @@ api = ApiStack(
     admin_client=auth.admin_client,
     table=database.table,
     images_bucket=storage.images_bucket,
+    reports_bucket=storage.reports_bucket,
     teacher_queue=notification.teacher_queue,
     env=env,
     tags=tags,
@@ -50,6 +51,7 @@ monitoring = MonitoringStack(
     app,
     "StoaMonitoringStack",
     api_function=api.api_function,
+    weekly_report_function=api.weekly_report_function,
     env=env,
     tags=tags,
 )

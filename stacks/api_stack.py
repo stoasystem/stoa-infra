@@ -12,6 +12,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_sqs as sqs,
     aws_iam as iam,
+    aws_scheduler as scheduler,
 )
 from constructs import Construct
 
@@ -28,6 +29,7 @@ class ApiStack(Stack):
         admin_client: cognito.UserPoolClient,
         table: dynamodb.Table,
         images_bucket: s3.Bucket,
+        reports_bucket: s3.Bucket,
         teacher_queue: sqs.Queue,
         **kwargs,
     ) -> None:
@@ -51,6 +53,7 @@ class ApiStack(Stack):
                 "ENVIRONMENT": "production",
                 "DYNAMODB_TABLE_NAME": table.table_name,
                 "S3_IMAGES_BUCKET": images_bucket.bucket_name,
+                "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
                 "TEACHER_QUEUE_URL": teacher_queue.queue_url,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                 "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
@@ -64,13 +67,85 @@ class ApiStack(Stack):
         # Grant permissions
         table.grant_read_write_data(self.api_function)
         images_bucket.grant_read_write(self.api_function)
+        reports_bucket.grant_read_write(self.api_function)
         teacher_queue.grant_send_messages(self.api_function)
+
+        self.weekly_report_function = lambda_.Function(
+            self,
+            "StoaWeeklyReportFunction",
+            function_name="stoa-weekly-report",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="stoa.jobs.weekly_reports.handler",
+            code=lambda_.Code.from_asset("../stoa-backend/dist"),
+            memory_size=1024,
+            timeout=Duration.minutes(15),
+            environment={
+                "ENVIRONMENT": "production",
+                "DYNAMODB_TABLE_NAME": table.table_name,
+                "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+            },
+        )
+
+        table.grant_read_write_data(self.weekly_report_function)
+        reports_bucket.grant_read_write(self.weekly_report_function)
 
         # Bedrock & Rekognition permissions
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["bedrock:InvokeModel"],
             resources=["*"],
         ))
+        self.weekly_report_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["bedrock:InvokeModel"],
+            resources=["*"],
+        ))
+        self.weekly_report_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail", "ses:SendRawEmail"],
+            resources=["*"],
+        ))
+
+        weekly_report_dlq = sqs.Queue(
+            self,
+            "WeeklyReportDLQ",
+            queue_name="stoa-weekly-report-dlq",
+            retention_period=Duration.days(14),
+        )
+        scheduler_role = iam.Role(
+            self,
+            "WeeklyReportSchedulerRole",
+            assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
+        )
+        self.weekly_report_function.grant_invoke(scheduler_role)
+        weekly_report_dlq.grant_send_messages(scheduler_role)
+
+        scheduler.CfnSchedule(
+            self,
+            "WeeklyReportSchedule",
+            name="stoa-weekly-report",
+            group_name="stoa-schedules",
+            description="Generate and send weekly parent learning reports.",
+            schedule_expression="cron(0 6 ? * MON *)",
+            schedule_expression_timezone="Europe/Zurich",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.weekly_report_function.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"weekly_reports"}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=86_400,
+                    maximum_retry_attempts=3,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=weekly_report_dlq.queue_arn,
+                ),
+            ),
+        )
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["rekognition:DetectText"],
             resources=["*"],

@@ -4,9 +4,7 @@ from aws_cdk import (
     Duration,
     aws_sqs as sqs,
     aws_ses as ses,
-    aws_lambda as lambda_,
     aws_scheduler as scheduler,
-    aws_iam as iam,
 )
 from constructs import Construct
 
