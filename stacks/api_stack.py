@@ -104,7 +104,10 @@ class ApiStack(Stack):
                 "Statement": [
                     {
                         "Effect": "Allow",
-                        "Action": "lambda:UpdateFunctionCode",
+                        "Action": [
+                            "lambda:GetFunctionConfiguration",
+                            "lambda:UpdateFunctionCode",
+                        ],
                         "Resource": [
                             self.api_function.function_arn,
                             self.weekly_report_function.function_arn,
