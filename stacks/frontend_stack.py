@@ -64,6 +64,16 @@ class FrontendStack(Stack):
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
             ),
+            # index.html must never be cached by CloudFront — it references hashed JS/CSS
+            # bundles, and stale caches cause blank-page errors when a deploy replaces bundles.
+            additional_behaviors={
+                "/index.html": cloudfront.BehaviorOptions(
+                    origin=s3_origin,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                ),
+            },
             error_responses=[
                 # SPA fallback — all 403/404 → index.html (React Router handles routing)
                 cloudfront.ErrorResponse(
