@@ -48,17 +48,11 @@ jobs:
 
       - name: Build Lambda dist (linux arm64)
         working-directory: stoa-backend
-        run: |
-          pip install uv
-          rm -rf dist
-          pip install \
-            --platform manylinux2014_aarch64 \
-            --implementation cp \
-            --python-version 3.12 \
-            --only-binary :all: \
-            --target dist \
-            -r requirements.txt
-          cp -r src/stoa dist/stoa
+        run: python scripts/build_lambda_dist.py
+
+      - name: Verify Lambda dist provenance
+        working-directory: stoa-backend
+        run: python scripts/build_lambda_dist.py --verify-only
 
       - name: Install CDK Python dependencies
         working-directory: stoa-infra
@@ -126,17 +120,11 @@ jobs:
 
       - name: Build Lambda dist (linux arm64)
         working-directory: stoa-backend
-        run: |
-          pip install uv
-          rm -rf dist
-          pip install \
-            --platform manylinux2014_aarch64 \
-            --implementation cp \
-            --python-version 3.12 \
-            --only-binary :all: \
-            --target dist \
-            -r requirements.txt
-          cp -r src/stoa dist/stoa
+        run: python scripts/build_lambda_dist.py
+
+      - name: Verify Lambda dist provenance
+        working-directory: stoa-backend
+        run: python scripts/build_lambda_dist.py --verify-only
 
       - name: Install CDK Python dependencies
         working-directory: stoa-infra

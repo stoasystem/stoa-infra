@@ -1,5 +1,6 @@
 """API Gateway HTTP API + Lambda (FastAPI/Mangum) + WAF."""
 from aws_cdk import (
+    AssetHashType,
     CfnOutput,
     Stack,
     Duration,
@@ -15,6 +16,8 @@ from aws_cdk import (
     aws_scheduler as scheduler,
 )
 from constructs import Construct
+
+from stacks.lambda_dist_guard import verify_lambda_dist
 
 
 class ApiStack(Stack):
@@ -35,10 +38,14 @@ class ApiStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        lambda_dist = verify_lambda_dist()
+        lambda_code = lambda_.Code.from_asset(
+            str(lambda_dist.path),
+            asset_hash=lambda_dist.asset_hash,
+            asset_hash_type=AssetHashType.CUSTOM,
+        )
+
         # Lambda function — FastAPI via Mangum
-        # The deployment package is pre-built by running:
-        #   cd stoa-backend && pip install -r requirements.txt -t dist/ && cp -r src/stoa dist/stoa
-        # This avoids requiring Docker during cdk deploy.
         self.api_function = lambda_.Function(
             self,
             "StoaApiFunction",
@@ -46,7 +53,7 @@ class ApiStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.main.handler",
-            code=lambda_.Code.from_asset("../stoa-backend/dist"),
+            code=lambda_code,
             memory_size=512,
             timeout=Duration.seconds(29),
             environment={
@@ -77,7 +84,7 @@ class ApiStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.jobs.weekly_reports.handler",
-            code=lambda_.Code.from_asset("../stoa-backend/dist"),
+            code=lambda_code,
             memory_size=1024,
             timeout=Duration.minutes(15),
             environment={
