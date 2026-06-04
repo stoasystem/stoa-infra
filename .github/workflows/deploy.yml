@@ -21,27 +21,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout stoa-infra
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: stoa-infra
 
       # CDK references ../stoa-backend/dist for Lambda code
       - name: Checkout stoa-backend
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: stoasystem/stoa-backend
           token: ${{ secrets.GITHUB_TOKEN }}
           path: stoa-backend
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Setup Node.js (for CDK CLI)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -61,7 +62,7 @@ jobs:
           uv sync
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::562923011260:role/stoa-github-infra-deploy
           aws-region: eu-central-2
@@ -94,26 +95,27 @@ jobs:
 
     steps:
       - name: Checkout stoa-infra
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: stoa-infra
 
       - name: Checkout stoa-backend
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: stoasystem/stoa-backend
           token: ${{ secrets.GITHUB_TOKEN }}
           path: stoa-backend
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Setup Node.js (for CDK CLI)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -133,7 +135,7 @@ jobs:
           uv sync
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::562923011260:role/stoa-github-infra-deploy
           aws-region: eu-central-2
