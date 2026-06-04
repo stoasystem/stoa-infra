@@ -100,6 +100,11 @@ class ApiStack(Stack):
 
         table.grant_read_write_data(self.weekly_report_function)
         self._grant_report_artifact_read_write(reports_bucket, self.weekly_report_function)
+        self.api_function.add_environment(
+            "WEEKLY_REPORT_FUNCTION_NAME",
+            self.weekly_report_function.function_name,
+        )
+        self.weekly_report_function.grant_invoke(self.api_function)
 
         iam.CfnPolicy(
             self,
