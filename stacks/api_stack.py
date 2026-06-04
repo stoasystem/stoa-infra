@@ -130,6 +130,12 @@ class ApiStack(Stack):
             actions=["ses:SendEmail", "ses:SendRawEmail"],
             resources=["*"],
         ))
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail", "ses:SendRawEmail"],
+            resources=[
+                f"arn:aws:ses:{self.region}:{self.account}:identity/stoaedu.ch",
+            ],
+        ))
 
         weekly_report_dlq = sqs.Queue(
             self,
