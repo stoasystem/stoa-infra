@@ -67,7 +67,7 @@ class ApiStack(Stack):
         # Grant permissions
         table.grant_read_write_data(self.api_function)
         images_bucket.grant_read_write(self.api_function)
-        reports_bucket.grant_read_write(self.api_function)
+        self._grant_report_artifact_read_write(reports_bucket, self.api_function)
         teacher_queue.grant_send_messages(self.api_function)
 
         self.weekly_report_function = lambda_.Function(
@@ -92,7 +92,7 @@ class ApiStack(Stack):
         )
 
         table.grant_read_write_data(self.weekly_report_function)
-        reports_bucket.grant_read_write(self.weekly_report_function)
+        self._grant_report_artifact_read_write(reports_bucket, self.weekly_report_function)
 
         iam.CfnPolicy(
             self,
@@ -249,3 +249,18 @@ class ApiStack(Stack):
 
         self.api_url = http_api.url
         CfnOutput(self, "ApiUrl", value=http_api.url or "", description="STOA API base URL")
+
+    def _grant_report_artifact_read_write(
+        self,
+        reports_bucket: s3.Bucket,
+        function: lambda_.Function,
+    ) -> None:
+        """Grant report artifact object access under the canonical private prefix."""
+        function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "s3:DeleteObject",
+                "s3:GetObject",
+                "s3:PutObject",
+            ],
+            resources=[reports_bucket.arn_for_objects("weekly-reports/*")],
+        ))
