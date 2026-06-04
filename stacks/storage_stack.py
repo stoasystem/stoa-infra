@@ -49,6 +49,7 @@ class StorageStack(Stack):
             bucket_name=f"stoa-reports-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
             server_access_logs_bucket=self.logs_bucket,
             server_access_logs_prefix="reports/",
             removal_policy=RemovalPolicy.RETAIN,
