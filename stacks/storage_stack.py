@@ -1,6 +1,7 @@
 """S3 buckets — homework images and weekly reports."""
 from aws_cdk import (
     Stack,
+    CfnOutput,
     RemovalPolicy,
     Duration,
     aws_s3 as s3,
@@ -53,4 +54,49 @@ class StorageStack(Stack):
             server_access_logs_bucket=self.logs_bucket,
             server_access_logs_prefix="reports/",
             removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        # Metadata-only immutable evidence manifests. Object Lock must be enabled
+        # at bucket creation time, so this is intentionally a dedicated bucket.
+        self.immutable_evidence_prefix = "audit-retention/"
+        self.immutable_evidence_bucket = s3.Bucket(
+            self,
+            "StoaImmutableEvidenceBucket",
+            bucket_name=f"stoa-immutable-evidence-{self.account}",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            versioned=True,
+            object_lock_enabled=True,
+            object_lock_default_retention=s3.ObjectLockRetention.governance(
+                Duration.days(365)
+            ),
+            server_access_logs_bucket=self.logs_bucket,
+            server_access_logs_prefix="immutable-evidence/",
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        CfnOutput(
+            self,
+            "ImmutableEvidenceBucketName",
+            value=self.immutable_evidence_bucket.bucket_name,
+            description="CDK-managed immutable evidence metadata bucket",
+        )
+        CfnOutput(
+            self,
+            "ImmutableEvidencePrefix",
+            value=self.immutable_evidence_prefix,
+            description="Immutable evidence metadata object prefix",
+        )
+        CfnOutput(
+            self,
+            "ImmutableEvidenceObjectLockMode",
+            value="GOVERNANCE",
+            description="Default S3 Object Lock retention mode for immutable evidence",
+        )
+        CfnOutput(
+            self,
+            "ImmutableEvidenceDefaultRetentionDays",
+            value="365",
+            description="Default S3 Object Lock retention period for immutable evidence",
         )

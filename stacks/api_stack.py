@@ -33,6 +33,7 @@ class ApiStack(Stack):
         table: dynamodb.Table,
         images_bucket: s3.Bucket,
         reports_bucket: s3.Bucket,
+        immutable_evidence_bucket: s3.Bucket,
         teacher_queue: sqs.Queue,
         **kwargs,
     ) -> None:
@@ -61,6 +62,10 @@ class ApiStack(Stack):
                 "DYNAMODB_TABLE_NAME": table.table_name,
                 "S3_IMAGES_BUCKET": images_bucket.bucket_name,
                 "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                "IMMUTABLE_AUDIT_STORAGE_MODE": "cdk_managed",
+                "IMMUTABLE_AUDIT_STORAGE_CDK_MANAGED": "true",
+                "IMMUTABLE_AUDIT_STORAGE_RESOURCE": immutable_evidence_bucket.bucket_name,
+                "IMMUTABLE_AUDIT_STORAGE_PREFIX": "audit-retention/",
                 "TEACHER_QUEUE_URL": teacher_queue.queue_url,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                 "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
@@ -75,6 +80,7 @@ class ApiStack(Stack):
         table.grant_read_write_data(self.api_function)
         images_bucket.grant_read_write(self.api_function)
         self._grant_report_artifact_read_write(reports_bucket, self.api_function)
+        self._grant_immutable_evidence_access(immutable_evidence_bucket, self.api_function)
         teacher_queue.grant_send_messages(self.api_function)
 
         self.weekly_report_function = lambda_.Function(
@@ -281,4 +287,18 @@ class ApiStack(Stack):
                 "s3:PutObject",
             ],
             resources=[reports_bucket.arn_for_objects("weekly-reports/*")],
+        ))
+
+    def _grant_immutable_evidence_access(
+        self,
+        immutable_evidence_bucket: s3.Bucket,
+        function: lambda_.Function,
+    ) -> None:
+        """Grant metadata-only immutable evidence access without delete permissions."""
+        function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "s3:GetObject",
+                "s3:PutObject",
+            ],
+            resources=[immutable_evidence_bucket.arn_for_objects("audit-retention/*")],
         ))

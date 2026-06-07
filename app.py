@@ -42,6 +42,7 @@ api = ApiStack(
     table=database.table,
     images_bucket=storage.images_bucket,
     reports_bucket=storage.reports_bucket,
+    immutable_evidence_bucket=storage.immutable_evidence_bucket,
     teacher_queue=notification.teacher_queue,
     env=env,
     tags=tags,
