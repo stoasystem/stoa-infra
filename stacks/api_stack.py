@@ -239,7 +239,14 @@ class ApiStack(Stack):
         )
 
         # Public routes (no auth)
-        for path in ["/auth/register", "/auth/login", "/auth/refresh", "/health"]:
+        for path in [
+            "/auth/register",
+            "/auth/login",
+            "/auth/refresh",
+            "/auth/forgot-password",
+            "/auth/reset-password",
+            "/health",
+        ]:
             http_api.add_routes(
                 path=path,
                 methods=[apigwv2.HttpMethod.POST, apigwv2.HttpMethod.GET],
