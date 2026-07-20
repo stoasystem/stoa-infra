@@ -76,6 +76,48 @@ class StorageStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
+        # Release artifacts use content-addressed keys under candidates/sha256/.
+        # Object Lock and versioning preserve every byte identity even if a key
+        # is submitted twice.  There is deliberately no lifecycle expiry: the
+        # 90-day governance lock is the minimum for failed/staging candidates,
+        # while current and known-good rollback versions remain retained.
+        self.release_artifact_bucket = s3.Bucket(
+            self,
+            "StoaReleaseArtifactBucket",
+            bucket_name=f"stoa-release-artifacts-{self.account}",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            versioned=True,
+            object_lock_enabled=True,
+            object_lock_default_retention=s3.ObjectLockRetention.governance(
+                Duration.days(90)
+            ),
+            server_access_logs_bucket=self.logs_bucket,
+            server_access_logs_prefix="release-artifacts/",
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        # Promotion, approval, smoke, and rollback receipts are long-lived WORM
+        # evidence. Seven years is the default minimum; no lifecycle rule can
+        # expire the current or latest known-good rollback evidence.
+        self.release_evidence_bucket = s3.Bucket(
+            self,
+            "StoaReleaseEvidenceBucket",
+            bucket_name=f"stoa-release-evidence-{self.account}",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            versioned=True,
+            object_lock_enabled=True,
+            object_lock_default_retention=s3.ObjectLockRetention.governance(
+                Duration.days(2555)
+            ),
+            server_access_logs_bucket=self.logs_bucket,
+            server_access_logs_prefix="release-evidence/",
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
         CfnOutput(
             self,
             "ImmutableEvidenceBucketName",
@@ -99,4 +141,16 @@ class StorageStack(Stack):
             "ImmutableEvidenceDefaultRetentionDays",
             value="365",
             description="Default S3 Object Lock retention period for immutable evidence",
+        )
+        CfnOutput(
+            self,
+            "ReleaseArtifactBucketName",
+            value=self.release_artifact_bucket.bucket_name,
+            description="Versioned Object Lock store for content-addressed release artifacts",
+        )
+        CfnOutput(
+            self,
+            "ReleaseEvidenceBucketName",
+            value=self.release_evidence_bucket.bucket_name,
+            description="Long-term Object Lock store for release evidence",
         )

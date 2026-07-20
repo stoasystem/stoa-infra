@@ -1,0 +1,168 @@
+"""Least-privilege identities for immutable release storage operations.
+
+This stack intentionally does not define Lambda aliases, Web release pointers,
+or deploy permissions. Those authorities are introduced only with their owned
+resources in later Phase 474 plans.
+"""
+
+from __future__ import annotations
+
+from aws_cdk import Stack, aws_iam as iam, aws_s3 as s3
+from constructs import Construct
+
+
+GITHUB_OIDC_ISSUER = "token.actions.githubusercontent.com"
+GITHUB_REPOSITORY = "stoasystem/stoa-backend"
+
+
+class ReleaseDeliveryStack(Stack):
+    """Create exact-subject GitHub OIDC roles around immutable release stores."""
+
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        artifact_bucket: s3.IBucket,
+        evidence_bucket: s3.IBucket,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(scope, construct_id, **kwargs)
+
+        provider = iam.OpenIdConnectProvider.from_open_id_connect_provider_arn(
+            self,
+            "GitHubOidcProvider",
+            (
+                f"arn:aws:iam::{self.account}:"
+                f"oidc-provider/{GITHUB_OIDC_ISSUER}"
+            ),
+        )
+
+        verify_role = self._github_role(
+            "VerifyRole",
+            role_name="stoa-release-verify",
+            subject=f"repo:{GITHUB_REPOSITORY}:ref:refs/heads/main",
+            provider=provider,
+        )
+        # The verification job gets an identity for auditable trust evaluation,
+        # but deliberately receives no AWS resource or deployment authority.
+        self.verify_role = verify_role
+
+        self.upload_role = self._github_role(
+            "UploadRole",
+            role_name="stoa-release-upload",
+            subject=f"repo:{GITHUB_REPOSITORY}:ref:refs/heads/main",
+            provider=provider,
+        )
+        self._grant_object_write(
+            self.upload_role,
+            artifact_bucket,
+            "candidates/sha256/*",
+        )
+        self._grant_object_write(
+            self.upload_role,
+            evidence_bucket,
+            "verification/*",
+        )
+
+        self.staging_role = self._github_role(
+            "StagingRole",
+            role_name="stoa-release-staging",
+            subject=f"repo:{GITHUB_REPOSITORY}:environment:staging",
+            provider=provider,
+        )
+        self._grant_object_read(
+            self.staging_role,
+            artifact_bucket,
+            "candidates/sha256/*",
+        )
+        self._grant_object_write(
+            self.staging_role,
+            evidence_bucket,
+            "staging/*",
+        )
+
+        self.production_role = self._github_role(
+            "ProductionRole",
+            role_name="stoa-release-production",
+            subject=f"repo:{GITHUB_REPOSITORY}:environment:production",
+            provider=provider,
+        )
+        self._grant_object_read(
+            self.production_role,
+            artifact_bucket,
+            "candidates/sha256/*",
+        )
+        self._grant_object_write(
+            self.production_role,
+            evidence_bucket,
+            "production/*",
+        )
+
+        self.rollback_role = self._github_role(
+            "RollbackRole",
+            role_name="stoa-release-rollback",
+            subject=f"repo:{GITHUB_REPOSITORY}:environment:production",
+            provider=provider,
+        )
+        self._grant_object_read(
+            self.rollback_role,
+            artifact_bucket,
+            "candidates/sha256/*",
+        )
+        self._grant_object_write(
+            self.rollback_role,
+            evidence_bucket,
+            "rollback/*",
+        )
+
+    def _github_role(
+        self,
+        construct_id: str,
+        *,
+        role_name: str,
+        subject: str,
+        provider: iam.IOpenIdConnectProvider,
+    ) -> iam.Role:
+        principal = iam.OpenIdConnectPrincipal(
+            provider,
+            conditions={
+                "StringEquals": {
+                    f"{GITHUB_OIDC_ISSUER}:aud": "sts.amazonaws.com",
+                    f"{GITHUB_OIDC_ISSUER}:sub": subject,
+                }
+            },
+        )
+        return iam.Role(
+            self,
+            construct_id,
+            role_name=role_name,
+            assumed_by=principal,
+            description="STOA immutable release pipeline role",
+        )
+
+    @staticmethod
+    def _grant_object_read(
+        role: iam.Role,
+        bucket: s3.IBucket,
+        key_pattern: str,
+    ) -> None:
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject", "s3:GetObjectVersion"],
+                resources=[bucket.arn_for_objects(key_pattern)],
+            )
+        )
+
+    @staticmethod
+    def _grant_object_write(
+        role: iam.Role,
+        bucket: s3.IBucket,
+        key_pattern: str,
+    ) -> None:
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject", "s3:PutObjectTagging"],
+                resources=[bucket.arn_for_objects(key_pattern)],
+            )
+        )
