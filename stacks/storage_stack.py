@@ -10,14 +10,20 @@ from constructs import Construct
 
 
 class StorageStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        resource_prefix: str = "stoa",
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # Access logs bucket (private, no public access)
         self.logs_bucket = s3.Bucket(
             self,
             "StoaLogsBucket",
-            bucket_name=f"stoa-access-logs-{self.account}",
+            bucket_name=f"{resource_prefix}-access-logs-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             removal_policy=RemovalPolicy.RETAIN,
@@ -28,7 +34,7 @@ class StorageStack(Stack):
         self.images_bucket = s3.Bucket(
             self,
             "StoaImagesBucket",
-            bucket_name=f"stoa-images-{self.account}",
+            bucket_name=f"{resource_prefix}-images-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             cors=[s3.CorsRule(
@@ -47,7 +53,7 @@ class StorageStack(Stack):
         self.reports_bucket = s3.Bucket(
             self,
             "StoaReportsBucket",
-            bucket_name=f"stoa-reports-{self.account}",
+            bucket_name=f"{resource_prefix}-reports-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,
@@ -62,7 +68,7 @@ class StorageStack(Stack):
         self.immutable_evidence_bucket = s3.Bucket(
             self,
             "StoaImmutableEvidenceBucket",
-            bucket_name=f"stoa-immutable-evidence-{self.account}",
+            bucket_name=f"{resource_prefix}-immutable-evidence-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,
@@ -84,7 +90,7 @@ class StorageStack(Stack):
         self.release_artifact_bucket = s3.Bucket(
             self,
             "StoaReleaseArtifactBucket",
-            bucket_name=f"stoa-release-artifacts-{self.account}",
+            bucket_name=f"{resource_prefix}-release-artifacts-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,
@@ -104,7 +110,7 @@ class StorageStack(Stack):
         self.release_evidence_bucket = s3.Bucket(
             self,
             "StoaReleaseEvidenceBucket",
-            bucket_name=f"stoa-release-evidence-{self.account}",
+            bucket_name=f"{resource_prefix}-release-evidence-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,

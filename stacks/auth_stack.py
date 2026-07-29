@@ -9,13 +9,19 @@ from constructs import Construct
 
 
 class AuthStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        resource_prefix: str = "stoa",
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self.user_pool = cognito.UserPool(
             self,
             "StoaUserPool",
-            user_pool_name="stoa-users",
+            user_pool_name=f"{resource_prefix}-users",
             self_sign_up_enabled=True,
             sign_in_aliases=cognito.SignInAliases(email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
@@ -35,6 +41,7 @@ class AuthStack(Stack):
         )
 
         # One App Client per role for fine-grained scope control
+        self._resource_prefix = resource_prefix
         self.student_client = self._add_client("student")
         self.parent_client = self._add_client("parent")
         self.teacher_client = self._add_client("teacher")
@@ -43,7 +50,7 @@ class AuthStack(Stack):
     def _add_client(self, role: str) -> cognito.UserPoolClient:
         return self.user_pool.add_client(
             f"Stoa{role.capitalize()}Client",
-            user_pool_client_name=f"stoa-{role}",
+            user_pool_client_name=f"{self._resource_prefix}-{role}",
             auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
             prevent_user_existence_errors=True,
             access_token_validity=Duration.hours(1),
