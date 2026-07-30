@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import aws_cdk as cdk
 from aws_cdk.assertions import Template
 
+from stacks.api_stack import ApiStack
+from stacks.auth_stack import AuthStack
+from stacks.database_stack import DatabaseStack
+from stacks.lambda_dist_guard import LambdaDistAsset
+from stacks.notification_stack import NotificationStack
 from stacks.release_delivery_stack import ReleaseDeliveryStack
 from stacks.storage_stack import StorageStack
 
@@ -229,3 +236,96 @@ def test_plan_does_not_create_aliases_or_web_pointer_resources() -> None:
         resource["Type"] for resource in delivery["Resources"].values()
     }
     assert actual_types.isdisjoint(forbidden_types)
+
+
+def _api_template(monkeypatch: Any, tmp_path: Path) -> dict[str, Any]:
+    dist_dir = tmp_path / "lambda-dist"
+    dist_dir.mkdir()
+    monkeypatch.setattr(
+        "stacks.api_stack.verify_lambda_dist",
+        lambda: LambdaDistAsset(path=dist_dir, asset_hash="0" * 64),
+    )
+
+    app = cdk.App()
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    auth = AuthStack(app, "TestAuth", env=env)
+    database = DatabaseStack(app, "TestDatabase", env=env)
+    storage = StorageStack(app, "TestApiStorage", env=env)
+    notification = NotificationStack(app, "TestNotification", env=env)
+    api = ApiStack(
+        app,
+        "TestApi",
+        user_pool=auth.user_pool,
+        student_client=auth.student_client,
+        parent_client=auth.parent_client,
+        teacher_client=auth.teacher_client,
+        admin_client=auth.admin_client,
+        table=database.table,
+        images_bucket=storage.images_bucket,
+        reports_bucket=storage.reports_bucket,
+        immutable_evidence_bucket=storage.immutable_evidence_bucket,
+        teacher_queue=notification.teacher_queue,
+        env=env,
+    )
+    return Template.from_stack(api).to_json()
+
+
+def _resource_by_property(
+    template: dict[str, Any], resource_type: str, property_name: str, value: str
+) -> tuple[str, dict[str, Any]]:
+    matches = [
+        (logical_id, resource)
+        for logical_id, resource in _named_resources(template, resource_type).items()
+        if resource["Properties"].get(property_name) == value
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_lambda_versions_and_aliases_bind_api_and_scheduler(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    template = _api_template(monkeypatch, tmp_path)
+    aliases = _named_resources(template, "AWS::Lambda::Alias")
+    expected_aliases = {
+        "stoa-api-staging",
+        "stoa-api-production",
+        "stoa-weekly-report-staging",
+        "stoa-weekly-report-production",
+    }
+    assert {resource["Properties"]["Name"] for resource in aliases.values()} == expected_aliases
+
+    versions = _named_resources(template, "AWS::Lambda::Version")
+    assert len(versions) == 2
+    for alias in aliases.values():
+        assert alias["Properties"]["FunctionVersion"] != "$LATEST"
+        assert "Fn::GetAtt" in alias["Properties"]["FunctionVersion"]
+
+    api_production_alias, _ = _resource_by_property(
+        template, "AWS::Lambda::Alias", "Name", "stoa-api-production"
+    )
+    weekly_production_alias, _ = _resource_by_property(
+        template, "AWS::Lambda::Alias", "Name", "stoa-weekly-report-production"
+    )
+    integrations = _named_resources(template, "AWS::ApiGatewayV2::Integration")
+    assert any(api_production_alias in json.dumps(resource) for resource in integrations.values())
+    schedules = _named_resources(template, "AWS::Scheduler::Schedule")
+    assert any(weekly_production_alias in json.dumps(resource) for resource in schedules.values())
+
+
+def test_release_roles_can_only_move_aliases_and_stale_dist_bypass_is_absent(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    api_template = _api_template(monkeypatch, tmp_path)
+    aliases = _named_resources(api_template, "AWS::Lambda::Alias")
+    api_production_alias, _ = _resource_by_property(
+        api_template, "AWS::Lambda::Alias", "Name", "stoa-api-production"
+    )
+    weekly_production_alias, _ = _resource_by_property(
+        api_template, "AWS::Lambda::Alias", "Name", "stoa-weekly-report-production"
+    )
+    assert api_production_alias in aliases
+    assert weekly_production_alias in aliases
+
+    guard_source = Path(__file__).parents[1] / "stacks" / "lambda_dist_guard.py"
+    assert "ALLOW_STALE_LAMBDA_DIST" not in guard_source.read_text(encoding="utf-8")
