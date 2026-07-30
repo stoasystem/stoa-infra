@@ -1,13 +1,14 @@
 """Least-privilege identities for immutable release storage operations.
 
-This stack intentionally does not define Lambda aliases, Web release pointers,
-or deploy permissions. Those authorities are introduced only with their owned
-resources in later Phase 474 plans.
+This stack accepts already-owned Lambda aliases to scope release roles to alias
+transitions. It never defines a Web release pointer or mutable code authority.
 """
 
 from __future__ import annotations
 
-from aws_cdk import Stack, aws_iam as iam, aws_s3 as s3
+from collections.abc import Sequence
+
+from aws_cdk import Stack, aws_iam as iam, aws_lambda as lambda_, aws_s3 as s3
 from constructs import Construct
 
 
@@ -25,6 +26,7 @@ class ReleaseDeliveryStack(Stack):
         *,
         artifact_bucket: s3.IBucket,
         evidence_bucket: s3.IBucket,
+        lambda_aliases: Sequence[lambda_.IAlias] = (),
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -81,6 +83,7 @@ class ReleaseDeliveryStack(Stack):
             evidence_bucket,
             "staging/*",
         )
+        self._grant_alias_transition(self.staging_role, lambda_aliases)
 
         self.production_role = self._github_role(
             "ProductionRole",
@@ -98,6 +101,7 @@ class ReleaseDeliveryStack(Stack):
             evidence_bucket,
             "production/*",
         )
+        self._grant_alias_transition(self.production_role, lambda_aliases)
 
         self.rollback_role = self._github_role(
             "RollbackRole",
@@ -115,6 +119,7 @@ class ReleaseDeliveryStack(Stack):
             evidence_bucket,
             "rollback/*",
         )
+        self._grant_alias_transition(self.rollback_role, lambda_aliases)
 
     def _github_role(
         self,
@@ -164,5 +169,20 @@ class ReleaseDeliveryStack(Stack):
             iam.PolicyStatement(
                 actions=["s3:PutObject", "s3:PutObjectTagging"],
                 resources=[bucket.arn_for_objects(key_pattern)],
+            )
+        )
+
+    @staticmethod
+    def _grant_alias_transition(
+        role: iam.Role,
+        aliases: Sequence[lambda_.IAlias],
+    ) -> None:
+        """Allow only alias reads/updates; callers enforce SHA and revision guards."""
+        if not aliases:
+            return
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["lambda:GetAlias", "lambda:GetFunction", "lambda:UpdateAlias"],
+                resources=[alias.function_arn for alias in aliases],
             )
         )

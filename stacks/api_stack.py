@@ -104,13 +104,43 @@ class ApiStack(Stack):
             },
         )
 
+        # Release traffic is pinned to immutable published versions. Promotion and
+        # rollback move aliases only after the caller validates the version
+        # CodeSha256 and the alias RevisionId.
+        self.api_version = self.api_function.current_version
+        self.api_staging_alias = lambda_.Alias(
+            self,
+            "StoaApiStagingAlias",
+            alias_name="staging",
+            version=self.api_version,
+        )
+        self.api_production_alias = lambda_.Alias(
+            self,
+            "StoaApiProductionAlias",
+            alias_name="production",
+            version=self.api_version,
+        )
+        self.weekly_report_version = self.weekly_report_function.current_version
+        self.weekly_report_staging_alias = lambda_.Alias(
+            self,
+            "StoaWeeklyReportStagingAlias",
+            alias_name="staging",
+            version=self.weekly_report_version,
+        )
+        self.weekly_report_production_alias = lambda_.Alias(
+            self,
+            "StoaWeeklyReportProductionAlias",
+            alias_name="production",
+            version=self.weekly_report_version,
+        )
+
         table.grant_read_write_data(self.weekly_report_function)
         self._grant_report_artifact_read_write(reports_bucket, self.weekly_report_function)
         self.api_function.add_environment(
             "WEEKLY_REPORT_FUNCTION_NAME",
-            self.weekly_report_function.function_name,
+            self.weekly_report_production_alias.function_arn,
         )
-        self.weekly_report_function.grant_invoke(self.api_function)
+        self.weekly_report_production_alias.grant_invoke(self.api_production_alias)
 
         iam.CfnPolicy(
             self,
@@ -123,12 +153,15 @@ class ApiStack(Stack):
                     {
                         "Effect": "Allow",
                         "Action": [
-                            "lambda:GetFunctionConfiguration",
-                            "lambda:UpdateFunctionCode",
+                            "lambda:GetAlias",
+                            "lambda:GetFunction",
+                            "lambda:UpdateAlias",
                         ],
                         "Resource": [
-                            self.api_function.function_arn,
-                            self.weekly_report_function.function_arn,
+                            self.api_staging_alias.function_arn,
+                            self.api_production_alias.function_arn,
+                            self.weekly_report_staging_alias.function_arn,
+                            self.weekly_report_production_alias.function_arn,
                         ],
                     }
                 ],
@@ -166,7 +199,7 @@ class ApiStack(Stack):
             "WeeklyReportSchedulerRole",
             assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
         )
-        self.weekly_report_function.grant_invoke(scheduler_role)
+        self.weekly_report_production_alias.grant_invoke(scheduler_role)
         weekly_report_dlq.grant_send_messages(scheduler_role)
 
         scheduler.CfnSchedule(
@@ -181,7 +214,7 @@ class ApiStack(Stack):
                 mode="OFF",
             ),
             target=scheduler.CfnSchedule.TargetProperty(
-                arn=self.weekly_report_function.function_arn,
+                arn=self.weekly_report_production_alias.function_arn,
                 role_arn=scheduler_role.role_arn,
                 input='{"source":"stoa.scheduler","job":"weekly_reports"}',
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
@@ -235,7 +268,7 @@ class ApiStack(Stack):
         )
 
         lambda_integration = integrations.HttpLambdaIntegration(
-            "LambdaIntegration", self.api_function
+            "LambdaIntegration", self.api_production_alias
         )
 
         # Public routes (no auth)

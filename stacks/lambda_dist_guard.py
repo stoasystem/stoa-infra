@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -29,14 +28,6 @@ def verify_lambda_dist(
     backend_root = (backend_root or DEFAULT_BACKEND_ROOT).resolve()
     dist_dir = backend_root / dist_name
     script = backend_root / DIST_SCRIPT
-
-    if os.environ.get("ALLOW_STALE_LAMBDA_DIST") == "1":
-        print(
-            "WARNING: ALLOW_STALE_LAMBDA_DIST=1 set; "
-            "skipping backend Lambda dist provenance verification.",
-            file=sys.stderr,
-        )
-        return LambdaDistAsset(path=dist_dir, asset_hash="allow-stale-lambda-dist-override")
 
     if not script.exists():
         raise RuntimeError(
@@ -67,8 +58,7 @@ def verify_lambda_dist(
         detail = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
         raise RuntimeError(
             "Backend Lambda dist provenance verification failed before CDK synth.\n"
-            "Rebuild with `python scripts/build_lambda_dist.py` in stoa-backend, "
-            "or set ALLOW_STALE_LAMBDA_DIST=1 only for a documented emergency override.\n"
+            "Rebuild with `python scripts/build_lambda_dist.py` in stoa-backend.\n"
             f"{detail}"
         )
     print(result.stdout.strip())
