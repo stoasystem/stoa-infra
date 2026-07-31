@@ -141,7 +141,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' 'staging-authority=controller-owned'
+          printf '%s\n' \
+            'staging-authority=controller-owned' \
+            'deployed-state-read=NOT RUN: Plan 32 protected inventory/controller'
 
   production_not_run:
     name: Record production operations as not run
