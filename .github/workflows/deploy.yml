@@ -1,18 +1,22 @@
-name: Formal Release Verification
+name: Infrastructure Staging Eligibility
 
 on:
   workflow_dispatch:
     inputs:
       backend_sha:
-        description: Exact backend commit SHA
-        required: true
-        type: string
-      frontend_sha:
-        description: Exact frontend commit SHA
+        description: Exact backend commit SHA containing the receipted transaction
         required: true
         type: string
       infra_sha:
-        description: Exact infra commit SHA
+        description: Exact infrastructure commit SHA
+        required: true
+        type: string
+      transaction_path:
+        description: Exact staging transaction receipt path below receipts/staging
+        required: true
+        type: string
+      transaction_sha256:
+        description: SHA-256 of the exact staging transaction receipt bytes
         required: true
         type: string
 
@@ -23,25 +27,30 @@ env:
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
-  formal:
-    name: Fixed formal candidate verification
+  verify:
+    name: Verify exact release identities and infrastructure topology
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
-      - name: Validate immutable source refs
+      - name: Validate immutable source and receipt identities
         shell: bash
         env:
           BACKEND_SHA: ${{ inputs.backend_sha }}
-          FRONTEND_SHA: ${{ inputs.frontend_sha }}
           INFRA_SHA: ${{ inputs.infra_sha }}
+          TRANSACTION_PATH: ${{ inputs.transaction_path }}
+          TRANSACTION_SHA256: ${{ inputs.transaction_sha256 }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           sha_pattern='^[0-9a-f]{40}$'
-          for sha in "$BACKEND_SHA" "$FRONTEND_SHA" "$INFRA_SHA" "$WORKFLOW_SHA"; do
+          digest_pattern='^[0-9a-f]{64}$'
+          for sha in "$BACKEND_SHA" "$INFRA_SHA" "$WORKFLOW_SHA"; do
             [[ "$sha" =~ $sha_pattern ]] || exit 1
           done
-          [[ "$INFRA_SHA" == "$WORKFLOW_SHA" ]]
+          [[ "$INFRA_SHA" == "$WORKFLOW_SHA" ]] || exit 1
+          [[ "$TRANSACTION_SHA256" =~ $digest_pattern ]] || exit 1
+          [[ "$TRANSACTION_PATH" =~ ^receipts/staging/[A-Za-z0-9][A-Za-z0-9._/-]{0,240}\.json$ ]] || exit 1
+          [[ "$TRANSACTION_PATH" != *".."* ]] || exit 1
 
       - name: Check out backend
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -49,15 +58,6 @@ jobs:
           repository: stoasystem/stoa-backend
           ref: ${{ inputs.backend_sha }}
           path: stoa-backend
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Check out frontend
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        with:
-          repository: stoasystem/stoa-frontend
-          ref: ${{ inputs.frontend_sha }}
-          path: stoa-frontend
           fetch-depth: 1
           persist-credentials: false
 
@@ -85,57 +85,76 @@ jobs:
         shell: bash
         env:
           BACKEND_SHA: ${{ inputs.backend_sha }}
-          FRONTEND_SHA: ${{ inputs.frontend_sha }}
           INFRA_SHA: ${{ inputs.infra_sha }}
         run: |
           set -euo pipefail
           test "$(git -C "$GITHUB_WORKSPACE/stoa-backend" rev-parse HEAD)" = "$BACKEND_SHA"
-          test "$(git -C "$GITHUB_WORKSPACE/stoa-frontend" rev-parse HEAD)" = "$FRONTEND_SHA"
           test "$(git -C "$GITHUB_WORKSPACE/stoa-infra" rev-parse HEAD)" = "$INFRA_SHA"
 
-      - name: Prepare and prove Linux namespaces
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
-            sudo sysctl -w kernel.unprivileged_userns_clone=1
-          fi
-          /usr/bin/unshare --user --map-root-user --net -- true
-          /usr/bin/unshare --user --map-root-user --pid --fork --mount-proc \
-            --kill-child=SIGKILL -- /usr/bin/dash -c 'test "$$" -eq 1'
-
-      - name: Create private evidence directory
+      - name: Create private release evidence directory
         shell: bash
         run: |
           set -euo pipefail
           umask 077
-          evidence_dir="$(mktemp -d "$RUNNER_TEMP/stoa-formal-evidence.XXXXXX")"
+          evidence_dir="$(mktemp -d "$RUNNER_TEMP/stoa-infra-release.XXXXXX")"
           chmod 0700 "$evidence_dir"
           test "$(stat -c %a "$evidence_dir")" = "700"
           printf 'EVIDENCE_DIR=%s\n' "$evidence_dir" >> "$GITHUB_ENV"
 
-      - name: Issue release candidate
-        working-directory: stoa-backend
+      - name: Run frozen infrastructure preflight
+        working-directory: stoa-infra
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/release_gate.py candidate \
-            --backend-root "$GITHUB_WORKSPACE/stoa-backend" \
-            --frontend-root "$GITHUB_WORKSPACE/stoa-frontend" \
-            --infra-root "$GITHUB_WORKSPACE/stoa-infra" \
-            --output "$EVIDENCE_DIR/candidate.json"
+          uv sync --frozen
+          uv run pytest -q tests/test_release_topology.py
+          uv run cdk synth > /dev/null
+          uv run cdk diff --no-change-set > /dev/null
 
-      - name: Run fixed formal aggregate
+      - name: Validate the canonical staging transaction
         working-directory: stoa-backend
+        shell: bash
+        env:
+          TRANSACTION_PATH: ${{ inputs.transaction_path }}
+          TRANSACTION_SHA256: ${{ inputs.transaction_sha256 }}
+        run: |
+          set -euo pipefail
+          transaction="$GITHUB_WORKSPACE/stoa-backend/$TRANSACTION_PATH"
+          test -f "$transaction"
+          test ! -L "$transaction"
+          test "$(sha256sum "$transaction" | cut -d " " -f 1)" = "$TRANSACTION_SHA256"
+          python scripts/release_gate.py delivery-validate \
+            --transaction "$transaction" \
+            --output "$EVIDENCE_DIR/delivery-validation.json"
+
+  staging:
+    name: Protected staging eligibility boundary
+    needs: [verify]
+    environment: staging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Retain reviewed staging authority boundary
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/release_gate.py formal \
-            --candidate "$EVIDENCE_DIR/candidate.json" \
-            --backend-root "$GITHUB_WORKSPACE/stoa-backend" \
-            --frontend-root "$GITHUB_WORKSPACE/stoa-frontend" \
-            --infra-root "$GITHUB_WORKSPACE/stoa-infra" \
-            --output "$EVIDENCE_DIR/formal.json"
+          printf '%s\n' 'staging-authority=controller-owned'
+
+  production_not_run:
+    name: Record production operations as not run
+    needs: [verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Emit exact production obligations
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            'production-infrastructure=NOT RUN' \
+            'production-deploy=NOT RUN' \
+            'production-smoke=NOT RUN' \
+            'production-rollback=NOT RUN'
