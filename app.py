@@ -10,6 +10,7 @@ from stacks.ai_stack import AiStack
 from stacks.notification_stack import NotificationStack
 from stacks.monitoring_stack import MonitoringStack
 from stacks.frontend_stack import FrontendStack
+from stacks.release_delivery_stack import ReleaseDeliveryStack
 
 app = cdk.App()
 
@@ -58,5 +59,22 @@ monitoring = MonitoringStack(
 )
 
 frontend = FrontendStack(app, "StoaFrontendStack", env=env, tags=tags)
+
+release_delivery = ReleaseDeliveryStack(
+    app,
+    "StoaReleaseDeliveryStack",
+    artifact_bucket=storage.release_artifact_bucket,
+    evidence_bucket=storage.release_evidence_bucket,
+    web_bucket=frontend.spa_bucket,
+    distribution=frontend.distribution,
+    lambda_aliases=(
+        api.api_staging_alias,
+        api.api_production_alias,
+        api.weekly_report_staging_alias,
+        api.weekly_report_production_alias,
+    ),
+    env=env,
+    tags=tags,
+)
 
 app.synth()

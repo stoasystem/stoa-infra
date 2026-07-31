@@ -28,11 +28,14 @@ def _templates() -> tuple[dict[str, Any], dict[str, Any]]:
     app = cdk.App()
     env = cdk.Environment(account=ACCOUNT, region=REGION)
     storage = StorageStack(app, "TestStorage", env=env)
+    frontend = FrontendStack(app, "TestFrontend", env=env)
     delivery = ReleaseDeliveryStack(
         app,
         "TestReleaseDelivery",
         artifact_bucket=storage.release_artifact_bucket,
         evidence_bucket=storage.release_evidence_bucket,
+        web_bucket=frontend.spa_bucket,
+        distribution=frontend.distribution,
         env=env,
     )
     return (
@@ -172,18 +175,21 @@ def test_release_role_permissions_are_separated_and_resource_scoped() -> None:
     expected_actions = {
         "stoa-release-upload": {"s3:PutObject", "s3:PutObjectTagging"},
         "stoa-release-staging": {
+            "cloudfront:CreateInvalidation",
             "s3:GetObject",
             "s3:GetObjectVersion",
             "s3:PutObject",
             "s3:PutObjectTagging",
         },
         "stoa-release-production": {
+            "cloudfront:CreateInvalidation",
             "s3:GetObject",
             "s3:GetObjectVersion",
             "s3:PutObject",
             "s3:PutObjectTagging",
         },
         "stoa-release-rollback": {
+            "cloudfront:CreateInvalidation",
             "s3:GetObject",
             "s3:GetObjectVersion",
             "s3:PutObject",
@@ -357,11 +363,18 @@ def test_release_roles_can_only_move_aliases_and_stale_dist_bypass_is_absent(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     app, storage, api = _api_stack(monkeypatch, tmp_path)
+    frontend = FrontendStack(
+        app,
+        "TestAliasFrontend",
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
     delivery = ReleaseDeliveryStack(
         app,
         "TestAliasDelivery",
         artifact_bucket=storage.release_artifact_bucket,
         evidence_bucket=storage.release_evidence_bucket,
+        web_bucket=frontend.spa_bucket,
+        distribution=frontend.distribution,
         lambda_aliases=(
             api.api_staging_alias,
             api.api_production_alias,
@@ -409,6 +422,8 @@ def test_frontend_serves_a_versioned_descriptor_and_immutable_release_prefixes()
 
     bucket = next(iter(_named_resources(template, "AWS::S3::Bucket").values()))
     assert bucket["Properties"]["VersioningConfiguration"] == {"Status": "Enabled"}
+    assert bucket["DeletionPolicy"] == "Retain"
+    assert bucket["UpdateReplacePolicy"] == "Retain"
     distribution = next(
         iter(_named_resources(template, "AWS::CloudFront::Distribution").values())
     )
@@ -417,6 +432,10 @@ def test_frontend_serves_a_versioned_descriptor_and_immutable_release_prefixes()
         behavior for behavior in behaviors if behavior["PathPattern"] == "/served-release.json"
     )
     assert served_release["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+    assert (
+        served_release["TargetOriginId"]
+        == distribution["Properties"]["DistributionConfig"]["DefaultCacheBehavior"]["TargetOriginId"]
+    )
 
 
 def test_release_roles_can_write_only_immutable_web_prefixes_and_the_served_pointer() -> None:
@@ -444,3 +463,12 @@ def test_release_roles_can_write_only_immutable_web_prefixes_and_the_served_poin
         assert "served-release.json" in rendered
         assert "cloudfront:CreateInvalidation" in rendered
         assert "s3:DeleteObject" not in rendered
+
+
+def test_app_passes_owned_web_resources_to_release_delivery_without_name_lookup() -> None:
+    app_source = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+    assert "ReleaseDeliveryStack" in app_source
+    assert "web_bucket=frontend.spa_bucket" in app_source
+    assert "distribution=frontend.distribution" in app_source
+    assert "from_bucket_name" not in app_source
+    assert "from_distribution_attributes" not in app_source

@@ -1,14 +1,21 @@
 """Least-privilege identities for immutable release storage operations.
 
-This stack accepts already-owned Lambda aliases to scope release roles to alias
-transitions. It never defines a Web release pointer or mutable code authority.
+This stack accepts already-owned Lambda aliases, a Web bucket, and its
+CloudFront distribution. It scopes release roles to immutable aliases and one
+versioned served-release pointer without mutable code authority.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from aws_cdk import Stack, aws_iam as iam, aws_lambda as lambda_, aws_s3 as s3
+from aws_cdk import (
+    Stack,
+    aws_cloudfront as cloudfront,
+    aws_iam as iam,
+    aws_lambda as lambda_,
+    aws_s3 as s3,
+)
 from constructs import Construct
 
 
@@ -26,6 +33,8 @@ class ReleaseDeliveryStack(Stack):
         *,
         artifact_bucket: s3.IBucket,
         evidence_bucket: s3.IBucket,
+        web_bucket: s3.IBucket,
+        distribution: cloudfront.IDistribution,
         lambda_aliases: Sequence[lambda_.IAlias] = (),
         **kwargs: object,
     ) -> None:
@@ -84,6 +93,11 @@ class ReleaseDeliveryStack(Stack):
             "staging/*",
         )
         self._grant_alias_transition(self.staging_role, lambda_aliases)
+        self._grant_web_release_transition(
+            self.staging_role,
+            web_bucket,
+            distribution,
+        )
 
         self.production_role = self._github_role(
             "ProductionRole",
@@ -102,6 +116,11 @@ class ReleaseDeliveryStack(Stack):
             "production/*",
         )
         self._grant_alias_transition(self.production_role, lambda_aliases)
+        self._grant_web_release_transition(
+            self.production_role,
+            web_bucket,
+            distribution,
+        )
 
         self.rollback_role = self._github_role(
             "RollbackRole",
@@ -120,6 +139,11 @@ class ReleaseDeliveryStack(Stack):
             "rollback/*",
         )
         self._grant_alias_transition(self.rollback_role, lambda_aliases)
+        self._grant_web_release_transition(
+            self.rollback_role,
+            web_bucket,
+            distribution,
+        )
 
     def _github_role(
         self,
@@ -184,5 +208,27 @@ class ReleaseDeliveryStack(Stack):
             iam.PolicyStatement(
                 actions=["lambda:GetAlias", "lambda:GetFunction", "lambda:UpdateAlias"],
                 resources=[alias.function_arn for alias in aliases],
+            )
+        )
+
+    @staticmethod
+    def _grant_web_release_transition(
+        role: iam.Role,
+        web_bucket: s3.IBucket,
+        distribution: cloudfront.IDistribution,
+    ) -> None:
+        """Permit exact object-version readback and bounded pointer transitions."""
+        immutable_web_objects = web_bucket.arn_for_objects("releases/sha256/*")
+        served_descriptor = web_bucket.arn_for_objects("served-release.json")
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"],
+                resources=[immutable_web_objects, served_descriptor],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["cloudfront:CreateInvalidation"],
+                resources=[distribution.distribution_arn],
             )
         )

@@ -21,18 +21,24 @@ APP_DOMAIN = "app.stoaedu.ch"
 class FrontendStack(Stack):
     """S3 bucket + CloudFront distribution for the React SPA at app.stoaedu.ch."""
 
+    immutable_release_prefix = "releases/sha256/"
+    served_release_key = "served-release.json"
+
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # SPA bucket — no public access (served via CloudFront OAC only)
+        # SPA objects remain private and are served only through CloudFront OAC.
+        # Release bytes live under the content-addressed prefix; the one stable
+        # descriptor object selects exact versioned Web and runtime-config bytes.
         self.spa_bucket = s3.Bucket(
             self,
             "StoaSpaBucket",
             bucket_name=f"stoa-frontend-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
+            enforce_ssl=True,
+            versioned=True,
+            removal_policy=RemovalPolicy.RETAIN,
         )
 
         # Origin Access Control (OAC) — successor to OAI
@@ -68,6 +74,15 @@ class FrontendStack(Stack):
             # bundles, and stale caches cause blank-page errors when a deploy replaces bundles.
             additional_behaviors={
                 "/index.html": cloudfront.BehaviorOptions(
+                    origin=s3_origin,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                ),
+                # This is the actual same-origin descriptor consumed by the
+                # Web client. Its stable key is versioned in S3, while its body
+                # selects immutable release-prefix object identities.
+                "/served-release.json": cloudfront.BehaviorOptions(
                     origin=s3_origin,
                     viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
