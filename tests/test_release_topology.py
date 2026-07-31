@@ -12,6 +12,7 @@ from aws_cdk.assertions import Template
 from stacks.api_stack import ApiStack
 from stacks.auth_stack import AuthStack
 from stacks.database_stack import DatabaseStack
+from stacks.frontend_stack import FrontendStack
 from stacks.lambda_dist_guard import LambdaDistAsset
 from stacks.notification_stack import NotificationStack
 from stacks.release_delivery_stack import ReleaseDeliveryStack
@@ -395,3 +396,51 @@ def test_release_roles_can_only_move_aliases_and_stale_dist_bypass_is_absent(
 
     guard_source = Path(__file__).parents[1] / "stacks" / "lambda_dist_guard.py"
     assert "ALLOW_STALE_LAMBDA_DIST" not in guard_source.read_text(encoding="utf-8")
+
+
+def test_frontend_serves_a_versioned_descriptor_and_immutable_release_prefixes() -> None:
+    app = cdk.App()
+    frontend = FrontendStack(
+        app,
+        "TestFrontend",
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
+    template = Template.from_stack(frontend).to_json()
+
+    bucket = next(iter(_named_resources(template, "AWS::S3::Bucket").values()))
+    assert bucket["Properties"]["VersioningConfiguration"] == {"Status": "Enabled"}
+    distribution = next(
+        iter(_named_resources(template, "AWS::CloudFront::Distribution").values())
+    )
+    behaviors = distribution["Properties"]["DistributionConfig"]["CacheBehaviors"]
+    served_release = next(
+        behavior for behavior in behaviors if behavior["PathPattern"] == "/served-release.json"
+    )
+    assert served_release["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+
+
+def test_release_roles_can_write_only_immutable_web_prefixes_and_the_served_pointer() -> None:
+    app = cdk.App()
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    frontend = FrontendStack(app, "TestPointerFrontend", env=env)
+    storage = StorageStack(app, "TestPointerStorage", env=env)
+    delivery = ReleaseDeliveryStack(
+        app,
+        "TestPointerDelivery",
+        artifact_bucket=storage.release_artifact_bucket,
+        evidence_bucket=storage.release_evidence_bucket,
+        web_bucket=frontend.spa_bucket,
+        distribution=frontend.distribution,
+        env=env,
+    )
+    template = Template.from_stack(delivery).to_json()
+    for role_name in (
+        "stoa-release-staging",
+        "stoa-release-production",
+        "stoa-release-rollback",
+    ):
+        rendered = json.dumps(_statements(_policy_for_role(template, role_name)))
+        assert "releases/sha256/*" in rendered
+        assert "served-release.json" in rendered
+        assert "cloudfront:CreateInvalidation" in rendered
+        assert "s3:DeleteObject" not in rendered
