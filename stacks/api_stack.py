@@ -35,6 +35,8 @@ class ApiStack(Stack):
         reports_bucket: s3.Bucket,
         immutable_evidence_bucket: s3.Bucket,
         teacher_queue: sqs.Queue,
+        env_name: str = "production",
+        resource_prefix: str = "stoa",
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -50,7 +52,7 @@ class ApiStack(Stack):
         self.api_function = lambda_.Function(
             self,
             "StoaApiFunction",
-            function_name="stoa-api",
+            function_name=f"{resource_prefix}-api",
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.main.handler",
@@ -58,7 +60,7 @@ class ApiStack(Stack):
             memory_size=512,
             timeout=Duration.seconds(29),
             environment={
-                "ENVIRONMENT": "production",
+                "ENVIRONMENT": env_name,
                 "DYNAMODB_TABLE_NAME": table.table_name,
                 "S3_IMAGES_BUCKET": images_bucket.bucket_name,
                 "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
@@ -86,7 +88,7 @@ class ApiStack(Stack):
         self.weekly_report_function = lambda_.Function(
             self,
             "StoaWeeklyReportFunction",
-            function_name="stoa-weekly-report",
+            function_name=f"{resource_prefix}-weekly-report",
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.jobs.weekly_reports.handler",
@@ -94,7 +96,7 @@ class ApiStack(Stack):
             memory_size=1024,
             timeout=Duration.minutes(15),
             environment={
-                "ENVIRONMENT": "production",
+                "ENVIRONMENT": env_name,
                 "DYNAMODB_TABLE_NAME": table.table_name,
                 "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
@@ -142,31 +144,34 @@ class ApiStack(Stack):
         )
         self.weekly_report_production_alias.grant_invoke(self.api_production_alias)
 
-        iam.CfnPolicy(
-            self,
-            "GithubBackendLambdaUpdatePolicy",
-            policy_name="stoa-github-backend-lambda-update",
-            roles=["stoa-github-backend-deploy"],
-            policy_document={
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "lambda:GetAlias",
-                            "lambda:GetFunction",
-                            "lambda:UpdateAlias",
-                        ],
-                        "Resource": [
-                            self.api_staging_alias.function_arn,
-                            self.api_production_alias.function_arn,
-                            self.weekly_report_staging_alias.function_arn,
-                            self.weekly_report_production_alias.function_arn,
-                        ],
-                    }
-                ],
-            },
-        )
+        # The GitHub deploy policy attaches to a pre-existing IAM role created outside CDK.
+        # Only create it for environments that have that CI/CD role (i.e. production).
+        if env_name == "production":
+            iam.CfnPolicy(
+                self,
+                "GithubBackendLambdaUpdatePolicy",
+                policy_name=f"{resource_prefix}-github-backend-lambda-update",
+                roles=[f"{resource_prefix}-github-backend-deploy"],
+                policy_document={
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "lambda:GetAlias",
+                                "lambda:GetFunction",
+                                "lambda:UpdateAlias",
+                            ],
+                            "Resource": [
+                                self.api_staging_alias.function_arn,
+                                self.api_production_alias.function_arn,
+                                self.weekly_report_staging_alias.function_arn,
+                                self.weekly_report_production_alias.function_arn,
+                            ],
+                        }
+                    ],
+                },
+            )
 
         # Bedrock & Rekognition permissions
         self.api_function.add_to_role_policy(iam.PolicyStatement(
@@ -191,7 +196,7 @@ class ApiStack(Stack):
         weekly_report_dlq = sqs.Queue(
             self,
             "WeeklyReportDLQ",
-            queue_name="stoa-weekly-report-dlq",
+            queue_name=f"{resource_prefix}-weekly-report-dlq",
             retention_period=Duration.days(14),
         )
         scheduler_role = iam.Role(
@@ -205,8 +210,8 @@ class ApiStack(Stack):
         scheduler.CfnSchedule(
             self,
             "WeeklyReportSchedule",
-            name="stoa-weekly-report",
-            group_name="stoa-schedules",
+            name=f"{resource_prefix}-weekly-report",
+            group_name=f"{resource_prefix}-schedules",
             description="Generate and send weekly parent learning reports.",
             schedule_expression="cron(0 6 ? * MON *)",
             schedule_expression_timezone="Europe/Zurich",
@@ -259,7 +264,7 @@ class ApiStack(Stack):
         http_api = apigwv2.HttpApi(
             self,
             "StoaHttpApi",
-            api_name="stoa-api",
+            api_name=f"{resource_prefix}-api",
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=["*"],
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],

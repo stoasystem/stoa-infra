@@ -11,14 +11,21 @@ from constructs import Construct
 
 
 class NotificationStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        resource_prefix: str = "stoa",
+        manage_ses_identity: bool = True,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # Dead-letter queue for failed teacher escalations
         dlq = sqs.Queue(
             self,
             "TeacherQueueDLQ",
-            queue_name="stoa-teacher-escalation-dlq.fifo",
+            queue_name=f"{resource_prefix}-teacher-escalation-dlq.fifo",
             fifo=True,
             content_based_deduplication=True,
             retention_period=Duration.days(14),
@@ -28,26 +35,27 @@ class NotificationStack(Stack):
         self.teacher_queue = sqs.Queue(
             self,
             "TeacherEscalationQueue",
-            queue_name="stoa-teacher-escalation.fifo",
+            queue_name=f"{resource_prefix}-teacher-escalation.fifo",
             fifo=True,
             content_based_deduplication=True,
             visibility_timeout=Duration.seconds(60),
             dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=3, queue=dlq),
         )
 
-        # Keep the CloudFormation-managed identity aligned with the deployed stack.
-        # stoaedu.ch already exists in SES outside this stack and is used by the app.
-        email_identity = ses.EmailIdentity(
-            self,
-            "StoaEmailIdentity",
-            identity=ses.Identity.domain("stoa.ch"),
-        )
-        email_identity.apply_removal_policy(RemovalPolicy.RETAIN)
+        # SES email identity — only managed by the production stack.
+        # Sandbox reuses the existing production SES identity via IAM permissions.
+        if manage_ses_identity:
+            email_identity = ses.EmailIdentity(
+                self,
+                "StoaEmailIdentity",
+                identity=ses.Identity.domain("stoa.ch"),
+            )
+            email_identity.apply_removal_policy(RemovalPolicy.RETAIN)
 
         # EventBridge Scheduler — every Monday 06:00 UTC+1 (05:00 UTC)
         # The target Lambda ARN is injected after ApiStack deploys
         scheduler.CfnScheduleGroup(
             self,
             "StoaScheduleGroup",
-            name="stoa-schedules",
+            name=f"{resource_prefix}-schedules",
         )
