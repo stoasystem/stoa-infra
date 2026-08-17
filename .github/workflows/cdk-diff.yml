@@ -46,8 +46,13 @@ jobs:
         with:
           python-version: 3.12.13
 
+      # Pinned: the provenance guard compares requirements.txt against a fresh
+      # locked export, and that output is not identical across uv releases.
       - name: Set up uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: 0.11.16
+          enable-cache: false
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
@@ -80,7 +85,9 @@ jobs:
         working-directory: stoa-infra
         run: |
           set -euo pipefail
-          cdk diff --all 2>&1 | tee "${RUNNER_TEMP}/cdk-diff.txt"
+          # No stack selector: CDK 2.1136 rejects --all here and diffs every
+          # stack in the app by default.
+          cdk diff 2>&1 | tee "${RUNNER_TEMP}/cdk-diff.txt"
 
       - name: Publish change surface to run summary
         if: always()
