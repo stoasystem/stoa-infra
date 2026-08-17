@@ -1,0 +1,110 @@
+name: CDK Diff
+
+# Read-only change preview. deploy.yml stays the credential-free formal
+# verification caller; this workflow only reads deployed state so the change
+# surface can be reviewed before any stack mutation is authorised.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infra-cdk-diff
+  cancel-in-progress: true
+
+env:
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "10"
+
+jobs:
+  diff:
+    name: Preview stack changes
+    # arm64 matches the Lambda runtime so the backend dist that CDK hashes as an
+    # asset is built and boot-smoked natively.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out infra
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: stoa-infra
+          persist-credentials: false
+
+      - name: Check out backend
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: stoasystem/stoa-backend
+          path: stoa-backend
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: 3.12.13
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk@2.1136.0
+
+      - name: Build Lambda dist (CDK hashes it as an asset)
+        working-directory: stoa-backend
+        run: python scripts/build_lambda_dist.py
+
+      - name: Verify Lambda dist provenance
+        working-directory: stoa-backend
+        run: python scripts/build_lambda_dist.py --verify-only
+
+      - name: Install CDK dependencies
+        working-directory: stoa-infra
+        run: uv sync --frozen
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
+        with:
+          role-to-assume: arn:aws:iam::562923011260:role/stoa-github-infra-deploy
+          aws-region: eu-central-2
+
+      - name: CDK diff
+        working-directory: stoa-infra
+        run: |
+          set -euo pipefail
+          cdk diff --all 2>&1 | tee "${RUNNER_TEMP}/cdk-diff.txt"
+
+      - name: Publish change surface to run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          diff_file="${RUNNER_TEMP}/cdk-diff.txt"
+          if [ ! -s "$diff_file" ]; then
+            echo "No diff output was produced." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## CDK diff"
+            echo
+            echo '```'
+            head -c 800000 "$diff_file"
+            echo
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diff
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: cdk-diff
+          path: ${{ runner.temp }}/cdk-diff.txt
+          if-no-files-found: warn
+          retention-days: 14
