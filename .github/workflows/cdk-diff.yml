@@ -75,6 +75,26 @@ jobs:
         working-directory: stoa-infra
         run: uv sync --frozen
 
+      # Synth calls the same verifier through the CDK venv interpreter. Running it
+      # here first turns a mismatch into a readable diff instead of a traceback.
+      - name: Verify dist the way synth will
+        working-directory: stoa-infra
+        run: |
+          set -euo pipefail
+          if .venv/bin/python -c 'from stacks.lambda_dist_guard import verify_lambda_dist; verify_lambda_dist()'; then
+            exit 0
+          fi
+          echo "::group::locked export vs committed requirements.txt"
+          cd ../stoa-backend
+          uv --version
+          uv export --format requirements-txt --no-dev --no-emit-project --locked \
+            >"${RUNNER_TEMP}/fresh-requirements.txt"
+          if diff -u "${RUNNER_TEMP}/fresh-requirements.txt" requirements.txt; then
+            echo "exports are identical; the mismatch is elsewhere"
+          fi
+          echo "::endgroup::"
+          exit 1
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
         with:
