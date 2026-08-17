@@ -135,7 +135,7 @@ release_delivery = ReleaseDeliveryStack(
         api.weekly_report_production_alias,
     ),
     env=env,
-    tags=tags,
+    tags=prod_tags,
 )
 
 app.synth()

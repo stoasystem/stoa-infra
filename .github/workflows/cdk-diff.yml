@@ -54,6 +54,14 @@ jobs:
           version: 0.11.16
           enable-cache: false
 
+      # A name typo in app.py went unnoticed for three weeks because the stack
+      # tests construct stacks directly and never load the app. This costs
+      # seconds and runs before the Lambda build, so the app is checked for
+      # undefined names before anything expensive happens.
+      - name: Check the CDK app for undefined names
+        working-directory: stoa-infra
+        run: uvx ruff@0.15.14 check --isolated --select F821 app.py stacks
+
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
