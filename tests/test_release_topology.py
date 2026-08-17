@@ -355,8 +355,19 @@ def test_lambda_versions_and_aliases_bind_api_and_scheduler(
         if resource["Properties"].get("PolicyName") == "stoa-github-backend-alias-update"
     ]
     assert len(github_update_policies) == 1
-    github_actions = _statements(github_update_policies[0])[0]["Action"]
-    assert set(github_actions) == {
+    github_statements = _statements(github_update_policies[0])
+    assert len(github_statements) == 2
+    function_update, alias_update = github_statements
+    assert set(function_update["Action"]) == {
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:PublishVersion",
+        "lambda:UpdateFunctionCode",
+    }
+    function_resources = json.dumps(function_update["Resource"])
+    assert "StoaApiFunction" in function_resources
+    assert "StoaWeeklyReportFunction" in function_resources
+    assert set(alias_update["Action"]) == {
         "lambda:GetAlias",
         "lambda:GetFunction",
         "lambda:UpdateAlias",

@@ -162,20 +162,33 @@ class ApiStack(Stack):
         )
         self.weekly_report_production_alias.grant_invoke(self.api_production_alias)
 
-        # The GitHub deploy policy attaches to a pre-existing IAM role created outside CDK.
-        # Only create it for environments that have that CI/CD role (i.e. production).
+        # The GitHub deploy policy attaches to a pre-existing IAM role created
+        # outside CDK. Only create it for environments that have that CI/CD
+        # role (i.e. production). Keep this policy name: a second inline policy
+        # named like the historical unmanaged UpdateFunctionCode attachment
+        # would fail EntityAlreadyExists.
         if env_name == "production":
             iam.CfnPolicy(
                 self,
                 "GithubBackendLambdaUpdatePolicy",
-                # Distinct from the unmanaged inline policy of the same historical
-                # name that grants UpdateFunctionCode. Creating that name again
-                # would fail EntityAlreadyExists on the first CDK deploy.
                 policy_name=f"{resource_prefix}-github-backend-alias-update",
                 roles=[f"{resource_prefix}-github-backend-deploy"],
                 policy_document={
                     "Version": "2012-10-17",
                     "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "lambda:GetFunction",
+                                "lambda:GetFunctionConfiguration",
+                                "lambda:PublishVersion",
+                                "lambda:UpdateFunctionCode",
+                            ],
+                            "Resource": [
+                                self.api_function.function_arn,
+                                self.weekly_report_function.function_arn,
+                            ],
+                        },
                         {
                             "Effect": "Allow",
                             "Action": [
@@ -189,7 +202,7 @@ class ApiStack(Stack):
                                 self.weekly_report_staging_alias.function_arn,
                                 self.weekly_report_production_alias.function_arn,
                             ],
-                        }
+                        },
                     ],
                 },
             )
