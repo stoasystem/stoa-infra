@@ -37,7 +37,17 @@ prod_tags = {"Project": "stoa", "ManagedBy": "cdk", "Environment": "production"}
 auth = AuthStack(app, "StoaAuthStack", resource_prefix="stoa", env=env, tags=prod_tags)
 database = DatabaseStack(app, "StoaDatabaseStack", table_name="stoa-main", env=env, tags=prod_tags)
 storage = StorageStack(app, "StoaStorageStack", resource_prefix="stoa", env=env, tags=prod_tags)
-notification = NotificationStack(app, "StoaNotificationStack", resource_prefix="stoa", env=env, tags=prod_tags)
+notification = NotificationStack(
+    app,
+    "StoaNotificationStack",
+    resource_prefix="stoa",
+    # The production SES domain (stoaedu.ch) already exists outside this stack.
+    # The template still names stoa.ch, which SES no longer has, so managing
+    # the identity here fails the whole production deploy.
+    manage_ses_identity=False,
+    env=env,
+    tags=prod_tags,
+)
 ai = AiStack(app, "StoaAiStack", env=env, tags=prod_tags)
 
 api = ApiStack(

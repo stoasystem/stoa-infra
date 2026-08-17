@@ -480,4 +480,8 @@ def test_app_passes_owned_web_resources_to_release_delivery_without_name_lookup(
     assert "web_bucket=frontend.spa_bucket" in app_source
     assert "distribution=frontend.distribution" in app_source
     assert "from_bucket_name" not in app_source
+    assert "manage_ses_identity=False" in app_source
+    assert 'Identity.domain("stoa.ch")' not in (
+        Path(__file__).parents[1] / "stacks" / "notification_stack.py"
+    ).read_text(encoding="utf-8")
     assert "from_distribution_attributes" not in app_source

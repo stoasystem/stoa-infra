@@ -48,7 +48,7 @@ class NotificationStack(Stack):
             email_identity = ses.EmailIdentity(
                 self,
                 "StoaEmailIdentity",
-                identity=ses.Identity.domain("stoa.ch"),
+                identity=ses.Identity.domain("stoaedu.ch"),
             )
             email_identity.apply_removal_policy(RemovalPolicy.RETAIN)
 
