@@ -18,6 +18,11 @@ from aws_cdk import (
 from constructs import Construct
 
 from stacks.lambda_dist_guard import verify_lambda_dist
+from stacks.lambda_environment import (
+    checkout_origins_for,
+    load_live_lambda_environment,
+    merge_lambda_environment,
+)
 
 
 class ApiStack(Stack):
@@ -59,23 +64,31 @@ class ApiStack(Stack):
             code=lambda_code,
             memory_size=512,
             timeout=Duration.seconds(29),
-            environment={
-                "ENVIRONMENT": env_name,
-                "DYNAMODB_TABLE_NAME": table.table_name,
-                "S3_IMAGES_BUCKET": images_bucket.bucket_name,
-                "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
-                "IMMUTABLE_AUDIT_STORAGE_MODE": "cdk_managed",
-                "IMMUTABLE_AUDIT_STORAGE_CDK_MANAGED": "true",
-                "IMMUTABLE_AUDIT_STORAGE_RESOURCE": immutable_evidence_bucket.bucket_name,
-                "IMMUTABLE_AUDIT_STORAGE_PREFIX": "audit-retention/",
-                "TEACHER_QUEUE_URL": teacher_queue.queue_url,
-                "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
-                "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
-                "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
-                "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
-                "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
-                "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
-            },
+            environment=merge_lambda_environment(
+                {
+                    "ENVIRONMENT": env_name,
+                    "DYNAMODB_TABLE_NAME": table.table_name,
+                    "S3_IMAGES_BUCKET": images_bucket.bucket_name,
+                    "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                    "IMMUTABLE_AUDIT_STORAGE_MODE": "cdk_managed",
+                    "IMMUTABLE_AUDIT_STORAGE_CDK_MANAGED": "true",
+                    "IMMUTABLE_AUDIT_STORAGE_RESOURCE": immutable_evidence_bucket.bucket_name,
+                    "IMMUTABLE_AUDIT_STORAGE_PREFIX": "audit-retention/",
+                    "TEACHER_QUEUE_URL": teacher_queue.queue_url,
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                    "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                    "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
+                    "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
+                    "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+                    "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
+                    "APP_BASE_URL": (
+                        "https://app.stoaedu.ch" if env_name == "production" else "http://localhost:5173"
+                    ),
+                },
+                load_live_lambda_environment(f"{resource_prefix}-api"),
+                env_name=env_name,
+            ),
         )
 
         # Grant permissions
@@ -95,15 +108,20 @@ class ApiStack(Stack):
             code=lambda_code,
             memory_size=1024,
             timeout=Duration.minutes(15),
-            environment={
-                "ENVIRONMENT": env_name,
-                "DYNAMODB_TABLE_NAME": table.table_name,
-                "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
-                "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
-                "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
-                "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
-                "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
-            },
+            environment=merge_lambda_environment(
+                {
+                    "ENVIRONMENT": env_name,
+                    "DYNAMODB_TABLE_NAME": table.table_name,
+                    "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                    "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                    "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+                    "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
+                },
+                load_live_lambda_environment(f"{resource_prefix}-weekly-report"),
+                env_name=env_name,
+            ),
         )
 
         # Release traffic is pinned to immutable published versions. Promotion and
@@ -150,7 +168,10 @@ class ApiStack(Stack):
             iam.CfnPolicy(
                 self,
                 "GithubBackendLambdaUpdatePolicy",
-                policy_name=f"{resource_prefix}-github-backend-lambda-update",
+                # Distinct from the unmanaged inline policy of the same historical
+                # name that grants UpdateFunctionCode. Creating that name again
+                # would fail EntityAlreadyExists on the first CDK deploy.
+                policy_name=f"{resource_prefix}-github-backend-alias-update",
                 roles=[f"{resource_prefix}-github-backend-deploy"],
                 policy_document={
                     "Version": "2012-10-17",

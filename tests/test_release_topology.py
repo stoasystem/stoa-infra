@@ -345,10 +345,14 @@ def test_lambda_versions_and_aliases_bind_api_and_scheduler(
     ]
     assert weekly_production_alias in json.dumps(weekly_report_target)
 
+    api_env = api_function["Properties"]["Environment"]["Variables"]
+    assert api_env["STRIPE_CHECKOUT_WEB_ORIGINS"] == '["https://app.stoaedu.ch"]'
+    assert api_env["APP_BASE_URL"] == "https://app.stoaedu.ch"
+
     github_update_policies = [
         resource
         for resource in _named_resources(template, "AWS::IAM::Policy").values()
-        if resource["Properties"].get("PolicyName") == "stoa-github-backend-lambda-update"
+        if resource["Properties"].get("PolicyName") == "stoa-github-backend-alias-update"
     ]
     assert len(github_update_policies) == 1
     github_actions = _statements(github_update_policies[0])[0]["Action"]
@@ -431,7 +435,12 @@ def test_frontend_serves_a_versioned_descriptor_and_immutable_release_prefixes()
     served_release = next(
         behavior for behavior in behaviors if behavior["PathPattern"] == "/served-release.json"
     )
-    assert served_release["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+    runtime_config = next(
+        behavior for behavior in behaviors if behavior["PathPattern"] == "/runtime-config.json"
+    )
+    disabled_cache = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+    assert served_release["CachePolicyId"] == disabled_cache
+    assert runtime_config["CachePolicyId"] == disabled_cache
     assert (
         served_release["TargetOriginId"]
         == distribution["Properties"]["DistributionConfig"]["DefaultCacheBehavior"]["TargetOriginId"]

@@ -88,6 +88,12 @@ class FrontendStack(Stack):
                     cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
                 ),
+                "/runtime-config.json": cloudfront.BehaviorOptions(
+                    origin=s3_origin,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                ),
             },
             error_responses=[
                 # SPA fallback — all 403/404 → index.html (React Router handles routing)
