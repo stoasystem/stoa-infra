@@ -86,7 +86,7 @@ class ApiStack(Stack):
                         "https://app.stoaedu.ch" if env_name == "production" else "http://localhost:5173"
                     ),
                 },
-                load_live_lambda_environment(f"{resource_prefix}-api"),
+                load_live_lambda_environment(f"{resource_prefix}-api", env_name=env_name),
                 env_name=env_name,
             ),
         )
@@ -119,7 +119,7 @@ class ApiStack(Stack):
                     "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                 },
-                load_live_lambda_environment(f"{resource_prefix}-weekly-report"),
+                load_live_lambda_environment(f"{resource_prefix}-weekly-report", env_name=env_name),
                 env_name=env_name,
             ),
         )

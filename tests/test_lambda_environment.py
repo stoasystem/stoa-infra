@@ -47,13 +47,13 @@ def test_load_live_environment_fails_closed_when_required_and_missing(
     monkeypatch.setenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", "1")
     monkeypatch.delenv("STOA_LIVE_LAMBDA_ENV_FILE", raising=False)
     with pytest.raises(RuntimeError, match="STOA_LIVE_LAMBDA_ENV_FILE"):
-        load_live_lambda_environment("stoa-api")
+        load_live_lambda_environment("stoa-api", env_name="production")
 
     snapshot = tmp_path / "env.json"
     snapshot.write_text(json.dumps({"stoa-weekly-report": {"ENVIRONMENT": "production"}}), encoding="utf-8")
     monkeypatch.setenv("STOA_LIVE_LAMBDA_ENV_FILE", str(snapshot))
     with pytest.raises(RuntimeError, match="stoa-api"):
-        load_live_lambda_environment("stoa-api")
+        load_live_lambda_environment("stoa-api", env_name="production")
 
 
 def test_load_live_environment_returns_the_named_function_map(
@@ -65,7 +65,12 @@ def test_load_live_environment_returns_the_named_function_map(
         encoding="utf-8",
     )
     monkeypatch.setenv("STOA_LIVE_LAMBDA_ENV_FILE", str(snapshot))
-    assert load_live_lambda_environment("stoa-api") == {"ENVIRONMENT": "production", "K": "v"}
+    monkeypatch.setenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", "1")
+    assert load_live_lambda_environment("stoa-api", env_name="production") == {
+        "ENVIRONMENT": "production",
+        "K": "v",
+    }
+    assert load_live_lambda_environment("stoa-sandbox-api", env_name="sandbox") is None
 
 
 def test_snapshot_script_writes_function_maps_without_printing_values(

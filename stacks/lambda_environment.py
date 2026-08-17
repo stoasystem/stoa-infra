@@ -27,9 +27,9 @@ def checkout_origins_for(env_name: str) -> str:
     return json.dumps(["http://localhost:5173"], separators=(",", ":"))
 
 
-def load_live_lambda_environment(function_name: str) -> dict[str, str] | None:
+def load_live_lambda_environment(function_name: str, *, env_name: str) -> dict[str, str] | None:
     """Read a pre-fetched snapshot. Lookup is done in CI so synth stays testable."""
-    require = os.environ.get("STOA_REQUIRE_LIVE_LAMBDA_ENV") == "1"
+    require = os.environ.get("STOA_REQUIRE_LIVE_LAMBDA_ENV") == "1" and env_name == "production"
     path_value = os.environ.get("STOA_LIVE_LAMBDA_ENV_FILE", "").strip()
     if not path_value:
         if require:
