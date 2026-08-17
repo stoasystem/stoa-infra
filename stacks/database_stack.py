@@ -61,3 +61,16 @@ class DatabaseStack(Stack):
             sort_key=dynamodb.Attribute(name="started_at", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
+
+        # GSI-ReviewState: teacher application review queue, oldest first.
+        # Sparse by design: only teacher application versions carry `review_state`, and a
+        # reviewed version moves to the approved/rejected partition, so the pending
+        # partition stays proportional to the actual queue rather than to all history.
+        self.table.add_global_secondary_index(
+            index_name="GSI-ReviewState",
+            partition_key=dynamodb.Attribute(
+                name="review_state", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(name="created_at", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )

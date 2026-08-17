@@ -291,6 +291,21 @@ class ApiStack(Stack):
                 integration=lambda_integration,
             )
 
+        # Teacher onboarding reaches these three before the candidate has any identity, so
+        # they cannot sit behind the authorizer. Methods are declared per path instead of
+        # reusing the POST+GET pair above: GET /teacher-applications is the reviewer queue,
+        # and granting it here would publish every pending candidacy.
+        for path, methods in [
+            ("/teacher-applications", [apigwv2.HttpMethod.POST]),
+            ("/teacher-applications/{application_id}/status", [apigwv2.HttpMethod.GET]),
+            ("/teacher-applications/activation/claim", [apigwv2.HttpMethod.POST]),
+        ]:
+            http_api.add_routes(
+                path=path,
+                methods=methods,
+                integration=lambda_integration,
+            )
+
         # OPTIONS /{proxy+} — no auth, allows CORS preflight for all paths
         http_api.add_routes(
             path="/{proxy+}",
