@@ -196,7 +196,11 @@ class ApiStack(Stack):
                                 "lambda:GetFunction",
                                 "lambda:UpdateAlias",
                             ],
+                            # IAM authorizes these actions against the unqualified
+                            # function ARN, so alias ARNs alone deny the call.
                             "Resource": [
+                                self.api_function.function_arn,
+                                self.weekly_report_function.function_arn,
                                 self.api_staging_alias.function_arn,
                                 self.api_production_alias.function_arn,
                                 self.weekly_report_staging_alias.function_arn,
