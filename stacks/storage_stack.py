@@ -37,6 +37,9 @@ class StorageStack(Stack):
             bucket_name=f"{resource_prefix}-images-{self.account}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
+            # The upload pipeline records the staging object's VersionId, which S3
+            # only returns from a versioned bucket.
+            versioned=True,
             cors=[s3.CorsRule(
                 allowed_methods=[s3.HttpMethods.PUT],
                 allowed_origins=["*"],
