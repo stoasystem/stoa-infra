@@ -211,13 +211,15 @@ class ApiStack(Stack):
                 },
             )
 
-        # Bedrock & Rekognition permissions
+        # Bedrock & Rekognition permissions. Token admission counts the request
+        # before invoking and fails closed, so CountTokens is required to answer
+        # a question at all, not only to meter one.
         self.api_function.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock:InvokeModel"],
+            actions=["bedrock:InvokeModel", "bedrock:CountTokens"],
             resources=["*"],
         ))
         self.weekly_report_function.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock:InvokeModel"],
+            actions=["bedrock:InvokeModel", "bedrock:CountTokens"],
             resources=["*"],
         ))
         self.weekly_report_function.add_to_role_policy(iam.PolicyStatement(

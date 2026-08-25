@@ -517,3 +517,27 @@ def test_buckets_acknowledged_by_version_id_are_versioned() -> None:
     ]
 
     assert unversioned == []
+
+
+def test_functions_that_invoke_a_model_may_also_count_its_tokens(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Token admission counts before invoking and fails closed.
+
+    Granting InvokeModel without CountTokens does not degrade metering, it
+    rejects every question, which is how chat came to answer 503 for everyone.
+    """
+    _app, _storage, api = _api_stack(monkeypatch, tmp_path)
+    template = Template.from_stack(api).to_json()
+
+    invoking = []
+    for policy in _named_resources(template, "AWS::IAM::Policy").values():
+        for statement in _statements(policy):
+            actions = statement.get("Action")
+            actions = actions if isinstance(actions, list) else [actions]
+            if "bedrock:InvokeModel" in actions:
+                invoking.append(actions)
+
+    assert invoking
+    for actions in invoking:
+        assert "bedrock:CountTokens" in actions
