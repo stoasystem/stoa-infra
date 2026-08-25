@@ -382,9 +382,16 @@ class ApiStack(Stack):
             actions=[
                 "s3:DeleteObject",
                 "s3:GetObject",
+                "s3:GetObjectVersion",
                 "s3:PutObject",
             ],
             resources=[reports_bucket.arn_for_objects("weekly-reports/*")],
+        ))
+        # Recovering an interrupted write means listing versions, which S3
+        # authorizes on the bucket rather than on the objects.
+        function.add_to_role_policy(iam.PolicyStatement(
+            actions=["s3:ListBucketVersions"],
+            resources=[reports_bucket.bucket_arn],
         ))
 
     def _grant_immutable_evidence_access(

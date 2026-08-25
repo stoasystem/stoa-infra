@@ -62,6 +62,9 @@ class StorageStack(Stack):
             enforce_ssl=True,
             server_access_logs_bucket=self.logs_bucket,
             server_access_logs_prefix="reports/",
+            # Report writes are acknowledged by version id, and the recovery path
+            # for an interrupted write finds the object by listing its versions.
+            versioned=True,
             removal_policy=RemovalPolicy.RETAIN,
         )
 

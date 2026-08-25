@@ -496,3 +496,24 @@ def test_app_passes_owned_web_resources_to_release_delivery_without_name_lookup(
         Path(__file__).parents[1] / "stacks" / "notification_stack.py"
     ).read_text(encoding="utf-8")
     assert "from_distribution_attributes" not in app_source
+
+
+def test_buckets_acknowledged_by_version_id_are_versioned() -> None:
+    """Report and image writes are acknowledged by version id.
+
+    A write to an unversioned bucket returns no VersionId, so parsing the
+    acknowledgement fails and the caller falls into a recovery path that lists
+    versions the bucket does not keep. That is how weekly report generation
+    started failing with AccessDenied on ListObjectVersions.
+    """
+    storage, _ = _templates()
+    buckets = _named_resources(storage, "AWS::S3::Bucket")
+    unversioned = [
+        logical_id
+        for logical_id, bucket in buckets.items()
+        if logical_id.startswith(("StoaReportsBucket", "StoaImagesBucket"))
+        and bucket["Properties"].get("VersioningConfiguration", {}).get("Status")
+        != "Enabled"
+    ]
+
+    assert unversioned == []
