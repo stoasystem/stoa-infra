@@ -541,3 +541,6 @@ def test_functions_that_invoke_a_model_may_also_count_its_tokens(
     assert invoking
     for actions in invoking:
         assert "bedrock:CountTokens" in actions
+        # Streaming is a distinct action, and a role holding only the buffered
+        # one fails closed the moment an answer is streamed.
+        assert "bedrock:InvokeModelWithResponseStream" in actions
