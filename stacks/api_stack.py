@@ -124,6 +124,29 @@ class ApiStack(Stack):
             ),
         )
 
+        self.dispatch_reconciler_function = lambda_.Function(
+            self,
+            "StoaDispatchReconcilerFunction",
+            function_name=f"{resource_prefix}-dispatch-reconciler",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="stoa.jobs.dispatch_reconciler.handler",
+            code=lambda_code,
+            memory_size=512,
+            timeout=Duration.minutes(5),
+            environment=merge_lambda_environment(
+                {
+                    "ENVIRONMENT": env_name,
+                    "DYNAMODB_TABLE_NAME": table.table_name,
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                },
+                load_live_lambda_environment(
+                    f"{resource_prefix}-dispatch-reconciler", env_name=env_name
+                ),
+                env_name=env_name,
+            ),
+        )
+
         # Release traffic is pinned to immutable published versions. Promotion and
         # rollback move aliases only after the caller validates the version
         # CodeSha256 and the alias RevisionId.
@@ -154,6 +177,15 @@ class ApiStack(Stack):
             version=self.weekly_report_version,
         )
 
+        self.dispatch_reconciler_version = self.dispatch_reconciler_function.current_version
+        self.dispatch_reconciler_production_alias = lambda_.Alias(
+            self,
+            "StoaDispatchReconcilerProductionAlias",
+            alias_name="production",
+            version=self.dispatch_reconciler_version,
+        )
+
+        table.grant_read_write_data(self.dispatch_reconciler_function)
         table.grant_read_write_data(self.weekly_report_function)
         self._grant_report_artifact_read_write(reports_bucket, self.weekly_report_function)
         self.api_function.add_environment(
@@ -187,6 +219,7 @@ class ApiStack(Stack):
                             "Resource": [
                                 self.api_function.function_arn,
                                 self.weekly_report_function.function_arn,
+                                self.dispatch_reconciler_function.function_arn,
                             ],
                         },
                         {
@@ -205,6 +238,8 @@ class ApiStack(Stack):
                                 self.api_production_alias.function_arn,
                                 self.weekly_report_staging_alias.function_arn,
                                 self.weekly_report_production_alias.function_arn,
+                                self.dispatch_reconciler_function.function_arn,
+                                self.dispatch_reconciler_production_alias.function_arn,
                             ],
                         },
                     ],
@@ -279,6 +314,46 @@ class ApiStack(Stack):
                 ),
             ),
         )
+        dispatch_reconciler_dlq = sqs.Queue(
+            self,
+            "DispatchReconcilerDLQ",
+            queue_name=f"{resource_prefix}-dispatch-reconciler-dlq",
+            retention_period=Duration.days(14),
+        )
+        dispatch_scheduler_role = iam.Role(
+            self,
+            "DispatchReconcilerSchedulerRole",
+            assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
+        )
+        self.dispatch_reconciler_production_alias.grant_invoke(dispatch_scheduler_role)
+        dispatch_reconciler_dlq.grant_send_messages(dispatch_scheduler_role)
+
+        # A teacher has ten minutes to accept, so a sweep every five bounds how
+        # long a student can be waiting on nobody.
+        scheduler.CfnSchedule(
+            self,
+            "DispatchReconcilerSchedule",
+            name=f"{resource_prefix}-dispatch-reconciler",
+            group_name=f"{resource_prefix}-schedules",
+            description="Re-offer teacher requests that nobody accepted.",
+            schedule_expression="rate(5 minutes)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.dispatch_reconciler_production_alias.function_arn,
+                role_arn=dispatch_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"dispatch_reconcile"}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=600,
+                    maximum_retry_attempts=2,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=dispatch_reconciler_dlq.queue_arn,
+                ),
+            ),
+        )
+
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["rekognition:DetectText"],
             resources=["*"],

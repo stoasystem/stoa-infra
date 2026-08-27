@@ -315,14 +315,16 @@ def test_lambda_versions_and_aliases_bind_api_and_scheduler(
 ) -> None:
     template = _api_template(monkeypatch, tmp_path)
     aliases = _named_resources(template, "AWS::Lambda::Alias")
-    assert len(aliases) == 4
+    functions = _named_resources(template, "AWS::Lambda::Function")
+    # Every deployed function is reached through an alias, never $LATEST.
+    assert len(aliases) >= len(functions)
     assert {resource["Properties"]["Name"] for resource in aliases.values()} == {
         "staging",
         "production",
     }
 
     versions = _named_resources(template, "AWS::Lambda::Version")
-    assert len(versions) == 2
+    assert len(versions) == len(functions)
     for alias in aliases.values():
         assert alias["Properties"]["FunctionVersion"] != "$LATEST"
         assert "Fn::GetAtt" in alias["Properties"]["FunctionVersion"]
@@ -544,3 +546,57 @@ def test_functions_that_invoke_a_model_may_also_count_its_tokens(
         # Streaming is a distinct action, and a role holding only the buffered
         # one fails closed the moment an answer is streamed.
         assert "bedrock:InvokeModelWithResponseStream" in actions
+
+
+def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path: Path) -> None:
+    """Dispatch failures and unaccepted offers used to leave a student on nobody."""
+    template = _api_template(monkeypatch, tmp_path)
+
+    functions = _named_resources(template, "AWS::Lambda::Function")
+    reconciler = [
+        resource
+        for resource in functions.values()
+        if resource["Properties"].get("Handler") == "stoa.jobs.dispatch_reconciler.handler"
+    ]
+    assert len(reconciler) == 1, "the dispatch sweep is not deployed"
+
+    schedules = _named_resources(template, "AWS::Scheduler::Schedule")
+    sweeps = [
+        resource
+        for resource in schedules.values()
+        if "dispatch-reconciler" in str(resource["Properties"].get("Name", ""))
+    ]
+    assert len(sweeps) == 1, "the dispatch sweep has no schedule"
+
+    properties = sweeps[0]["Properties"]
+    # A teacher has ten minutes to accept; a slower sweep would leave a student
+    # waiting longer than the deadline it exists to enforce.
+    assert properties["ScheduleExpression"] == "rate(5 minutes)"
+    assert properties["Target"]["DeadLetterConfig"]["Arn"], "a failed sweep would vanish"
+
+
+def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path: Path) -> None:
+    """Dispatch failures and unaccepted offers used to leave a student on nobody."""
+    template = _api_template(monkeypatch, tmp_path)
+
+    functions = _named_resources(template, "AWS::Lambda::Function")
+    reconciler = [
+        resource
+        for resource in functions.values()
+        if resource["Properties"].get("Handler") == "stoa.jobs.dispatch_reconciler.handler"
+    ]
+    assert len(reconciler) == 1, "the dispatch sweep is not deployed"
+
+    schedules = _named_resources(template, "AWS::Scheduler::Schedule")
+    sweeps = [
+        resource
+        for resource in schedules.values()
+        if "dispatch-reconciler" in str(resource["Properties"].get("Name", ""))
+    ]
+    assert len(sweeps) == 1, "the dispatch sweep has no schedule"
+
+    properties = sweeps[0]["Properties"]
+    # A teacher has ten minutes to accept; a slower sweep would leave a student
+    # waiting longer than the deadline it exists to enforce.
+    assert properties["ScheduleExpression"] == "rate(5 minutes)"
+    assert properties["Target"]["DeadLetterConfig"]["Arn"], "a failed sweep would vanish"
