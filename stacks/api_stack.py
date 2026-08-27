@@ -138,7 +138,14 @@ class ApiStack(Stack):
                 {
                     "ENVIRONMENT": env_name,
                     "DYNAMODB_TABLE_NAME": table.table_name,
+                    # Settings refuses to build in production without the
+                    # issuer and client allowlists, even for a job that
+                    # authenticates nobody.
                     "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                    "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                    "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
+                    "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
                 },
                 load_live_lambda_environment(
                     f"{resource_prefix}-dispatch-reconciler", env_name=env_name
