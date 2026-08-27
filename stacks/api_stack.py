@@ -124,6 +124,21 @@ class ApiStack(Stack):
             ),
         )
 
+        # The audit keyring is one keyring for the platform and is set outside
+        # CDK on the API. A job that has never been deployed has no copy of it,
+        # so it is carried across rather than invented here.
+        api_live_environment = (
+            load_live_lambda_environment(f"{resource_prefix}-api", env_name=env_name) or {}
+        )
+        carried_audit_keys = {
+            key: api_live_environment[key]
+            for key in (
+                "AUTHORIZATION_AUDIT_ACTIVE_KEY",
+                "AUTHORIZATION_AUDIT_ACTIVE_KEY_ID",
+            )
+            if key in api_live_environment
+        }
+
         self.dispatch_reconciler_function = lambda_.Function(
             self,
             "StoaDispatchReconcilerFunction",
@@ -146,6 +161,9 @@ class ApiStack(Stack):
                     "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
                     "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                     "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
+                    "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                    "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
+                    **carried_audit_keys,
                 },
                 load_live_lambda_environment(
                     f"{resource_prefix}-dispatch-reconciler", env_name=env_name
