@@ -87,6 +87,7 @@ def test_snapshot_script_writes_function_maps_without_printing_values(
     payloads = {
         "stoa-api": {"AUTHORIZATION_AUDIT_ACTIVE_KEY": "hex:secret", "ENVIRONMENT": "production"},
         "stoa-weekly-report": {"ENVIRONMENT": "production"},
+        "stoa-dispatch-reconciler": {"ENVIRONMENT": "production"},
     }
 
     def fake_run(argv, text=True):
@@ -105,3 +106,51 @@ def test_snapshot_script_writes_function_maps_without_printing_values(
     assert "hex:secret" not in logged
     assert "stoa-api: 2 keys" in logged
     assert "STOA_REQUIRE_LIVE_LAMBDA_ENV=1" in github_env.read_text(encoding="utf-8")
+
+
+def test_a_function_not_deployed_yet_is_recorded_rather_than_fatal(tmp_path, monkeypatch):
+    """CDK cannot preserve an environment that does not exist yet."""
+    import importlib.util
+    import subprocess
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "snapshot_lambda_environment.py"
+    spec = importlib.util.spec_from_file_location("snapshot_new_function", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def fake_run(argv, text=True):
+        name = argv[argv.index("--function-name") + 1]
+        if name == "stoa-dispatch-reconciler":
+            raise subprocess.CalledProcessError(254, argv)
+        return json.dumps({"ENVIRONMENT": "production"})
+
+    monkeypatch.setattr(module.subprocess, "check_output", fake_run)
+
+    snapshot = module.snapshot_lambda_environments()
+
+    assert snapshot["stoa-dispatch-reconciler"] is None
+    assert snapshot["stoa-api"] == {"ENVIRONMENT": "production"}
+
+
+def test_a_name_nobody_queried_is_still_refused(tmp_path, monkeypatch):
+    from stacks.lambda_environment import load_live_lambda_environment
+
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps({"stoa-api": {"ENVIRONMENT": "production"}}), encoding="utf-8")
+    monkeypatch.setenv("STOA_LIVE_LAMBDA_ENV_FILE", str(path))
+    monkeypatch.setenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", "1")
+
+    with pytest.raises(RuntimeError, match="missing stoa-dispatch-reconciler"):
+        load_live_lambda_environment("stoa-dispatch-reconciler", env_name="production")
+
+
+def test_a_function_recorded_as_not_deployed_synths_without_live_keys(tmp_path, monkeypatch):
+    from stacks.lambda_environment import load_live_lambda_environment
+
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps({"stoa-dispatch-reconciler": None}), encoding="utf-8")
+    monkeypatch.setenv("STOA_LIVE_LAMBDA_ENV_FILE", str(path))
+    monkeypatch.setenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", "1")
+
+    assert load_live_lambda_environment("stoa-dispatch-reconciler", env_name="production") is None

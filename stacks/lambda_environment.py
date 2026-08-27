@@ -48,6 +48,10 @@ def load_live_lambda_environment(function_name: str, *, env_name: str) -> dict[s
             raise RuntimeError(f"live Lambda environment snapshot is missing {function_name}")
         return None
     raw = payload[function_name]
+    if raw is None:
+        # Queried and not deployed yet, so there is no live environment to
+        # preserve. A name absent from the snapshot still fails above.
+        return None
     if not isinstance(raw, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in raw.items()):
         raise RuntimeError(f"live Lambda environment for {function_name} is malformed")
     return dict(raw)
