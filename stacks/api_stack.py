@@ -197,10 +197,12 @@ class ApiStack(Stack):
             "StoaApiProductionAlias",
             alias_name="production",
             version=self.api_version,
-            # One warm execution environment removes cold start from the
-            # login → first-usable-screen path (BUG-008); Python Lambda has
-            # no SnapStart, so this is the only lever for that.
-            provisioned_concurrent_executions=1,
+            # Provisioned concurrency is left off. One warm environment would
+            # remove cold start from the login path (BUG-008), but this account's
+            # concurrency limit cannot spare it: reserving one drops unreserved
+            # concurrency below the minimum of 10 and Lambda refuses the alias,
+            # rolling the stack back. Turning it on means raising the account
+            # limit first.
         )
         self.weekly_report_version = self.weekly_report_function.current_version
         self.weekly_report_staging_alias = lambda_.Alias(
