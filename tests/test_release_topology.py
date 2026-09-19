@@ -669,3 +669,25 @@ def test_claiming_an_invitation_is_reachable_without_a_token_and_only_by_post(
 
     assert "POST /auth/invitations/claim" in grouped["NONE"]
     assert "GET /auth/invitations/claim" not in grouped["NONE"]
+
+
+def test_the_user_pool_groups_are_not_declared_here(monkeypatch: Any, tmp_path: Path) -> None:
+    """Declaring them would take every signed-in user down with the deploy.
+
+    `students`, `parents`, `teachers` and `admins` exist on the deployed pool and
+    were made outside this stack. CloudFormation would try to create them, get
+    `Group already exists`, and roll AuthStack back — and group membership is not
+    decoration: stoa-backend refuses any request whose token does not carry
+    exactly one recognised group (`security/identity.py`, _GROUP_ROLES). So the
+    rollback is everyone losing the API at once.
+
+    Bringing them under management means importing them, and doing that wrongly
+    is worse: a later deploy that replaces a group empties its membership. Until
+    someone does that deliberately, the right number of groups here is none.
+    """
+    del monkeypatch, tmp_path
+    app = cdk.App()
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    template = Template.from_stack(AuthStack(app, "GroupFreeAuth", env=env)).to_json()
+
+    assert _named_resources(template, "AWS::Cognito::UserPoolGroup") == {}
