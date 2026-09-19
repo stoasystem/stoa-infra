@@ -4,6 +4,7 @@ from typing import Optional
 from aws_cdk import (
     Stack,
     Duration,
+    aws_apigatewayv2 as apigwv2,
     aws_cloudwatch as cw,
     aws_cloudwatch_actions as cw_actions,
     aws_lambda as lambda_,
@@ -18,6 +19,7 @@ class MonitoringStack(Stack):
         scope: Construct,
         construct_id: str,
         api_function: lambda_.Function,
+        http_api: apigwv2.HttpApi,
         weekly_report_function: Optional[lambda_.Function] = None,
         **kwargs,
     ) -> None:
@@ -38,7 +40,9 @@ class MonitoringStack(Stack):
         )
         error_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
-        # Lambda p99 latency alarm
+        # Lambda p99 latency alarm — tightened from 10s so a regression on a
+        # critical path like login (BUG-008, ~3.9s baseline) actually pages
+        # someone instead of hiding under a threshold nothing realistic hits.
         cw.Alarm(
             self,
             "ApiLatencyAlarm",
@@ -47,7 +51,7 @@ class MonitoringStack(Stack):
                 statistic="p99",
                 period=Duration.minutes(5),
             ),
-            threshold=10_000,  # 10 seconds
+            threshold=3_000,  # 3 seconds
             evaluation_periods=3,
             comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
         )
@@ -79,6 +83,21 @@ class MonitoringStack(Stack):
                 left=[
                     api_function.metric_duration(statistic="p50"),
                     api_function.metric_duration(statistic="p99"),
+                ],
+                width=12,
+            ),
+            cw.GraphWidget(
+                # Separates API Gateway's own queueing/integration overhead
+                # from Lambda execution time — the Lambda-only widget above
+                # can't tell those apart.
+                title="API Gateway Latency (p50 / p99)",
+                left=[
+                    http_api.metric_latency(statistic="p50"),
+                    http_api.metric_latency(statistic="p99"),
+                ],
+                right=[
+                    http_api.metric_integration_latency(statistic="p50"),
+                    http_api.metric_integration_latency(statistic="p99"),
                 ],
                 width=12,
             ),

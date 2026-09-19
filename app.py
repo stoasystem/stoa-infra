@@ -73,6 +73,7 @@ monitoring = MonitoringStack(
     app,
     "StoaMonitoringStack",
     api_function=api.api_function,
+    http_api=api.http_api,
     weekly_report_function=api.weekly_report_function,
     env=env,
     tags=prod_tags,

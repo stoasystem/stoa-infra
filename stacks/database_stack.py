@@ -28,6 +28,7 @@ class DatabaseStack(Stack):
             point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
                 point_in_time_recovery_enabled=True,
             ),
+            time_to_live_attribute="expires_at",
             removal_policy=RemovalPolicy.RETAIN,
         )
 

@@ -62,8 +62,14 @@ class ApiStack(Stack):
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.main.handler",
             code=lambda_code,
-            memory_size=512,
+            memory_size=1024,
             timeout=Duration.seconds(29),
+            # Adds Init Duration (cold start) to CloudWatch so the login
+            # latency investigation (BUG-008) can be measured, not guessed.
+            # arm64 in eu-central-2 is served by exactly one Insights layer: of the 17
+            # versions CDK knows, 498 is the only one with an ARM ARN for this region.
+            # Any other value fails at synth, which takes cdk deploy down with it.
+            insights_version=lambda_.LambdaInsightsVersion.VERSION_1_0_498_0,
             environment=merge_lambda_environment(
                 {
                     "ENVIRONMENT": env_name,
@@ -187,6 +193,10 @@ class ApiStack(Stack):
             "StoaApiProductionAlias",
             alias_name="production",
             version=self.api_version,
+            # One warm execution environment removes cold start from the
+            # login → first-usable-screen path (BUG-008); Python Lambda has
+            # no SnapStart, so this is the only lever for that.
+            provisioned_concurrent_executions=1,
         )
         self.weekly_report_version = self.weekly_report_function.current_version
         self.weekly_report_staging_alias = lambda_.Alias(
