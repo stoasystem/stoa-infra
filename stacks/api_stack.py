@@ -429,34 +429,45 @@ class ApiStack(Stack):
                 allow_headers=["Authorization", "Content-Type"],
             ),
         )
+        self.http_api = http_api
 
         lambda_integration = integrations.HttpLambdaIntegration(
             "LambdaIntegration", self.api_production_alias
         )
 
-        # Public routes (no auth)
-        for path in [
-            "/auth/register",
-            "/auth/login",
-            "/auth/refresh",
-            "/auth/forgot-password",
-            "/auth/reset-password",
-            "/health",
-        ]:
-            http_api.add_routes(
-                path=path,
-                methods=[apigwv2.HttpMethod.POST, apigwv2.HttpMethod.GET],
-                integration=lambda_integration,
-            )
-
-        # Teacher onboarding reaches these three before the candidate has any identity, so
-        # they cannot sit behind the authorizer. Methods are declared per path instead of
-        # reusing the POST+GET pair above: GET /teacher-applications is the reviewer queue,
-        # and granting it here would publish every pending candidacy.
+        # The full unauthenticated surface, one entry per method the handler actually
+        # answers. It used to pair POST with GET for each path, which published a
+        # GET /auth/register, GET /auth/login and four more that no handler serves —
+        # gateway surface that existed only because the loop was convenient.
+        # stoa-backend pins this same set from its side in
+        # tests/test_route_authorization_inventory.py; the two must agree.
         for path, methods in [
+            ("/health", [apigwv2.HttpMethod.GET]),
+            ("/auth/register", [apigwv2.HttpMethod.POST]),
+            ("/auth/login", [apigwv2.HttpMethod.POST]),
+            ("/auth/refresh", [apigwv2.HttpMethod.POST]),
+            ("/auth/forgot-password", [apigwv2.HttpMethod.POST]),
+            ("/auth/reset-password", [apigwv2.HttpMethod.POST]),
+            ("/auth/email-verification/resend", [apigwv2.HttpMethod.POST]),
+            ("/auth/email-verification/confirm", [apigwv2.HttpMethod.POST]),
+            ("/auth/login-code/request", [apigwv2.HttpMethod.POST]),
+            ("/auth/login-code/confirm", [apigwv2.HttpMethod.POST]),
+            # Logout carries the token in the body precisely so it does not need the
+            # authorizer. Behind it, an expired session could never be revoked, which
+            # is the case that most wants revoking.
+            ("/auth/logout", [apigwv2.HttpMethod.POST]),
+            ("/auth/invitations/claim", [apigwv2.HttpMethod.POST]),
+            ("/analytics/events", [apigwv2.HttpMethod.POST]),
+            # Teacher onboarding reaches these before the candidate has any identity.
+            # GET /teacher-applications is the reviewer queue and stays behind the
+            # authorizer: granting it here would publish every pending candidacy.
             ("/teacher-applications", [apigwv2.HttpMethod.POST]),
             ("/teacher-applications/{application_id}/status", [apigwv2.HttpMethod.GET]),
             ("/teacher-applications/activation/claim", [apigwv2.HttpMethod.POST]),
+            # Stripe signs with its own secret and cannot present a JWT. The handler
+            # verifies the untouched body through Stripe's SDK and refuses outright
+            # when the signing secret is unset, so the signature is the authenticator.
+            ("/billing/webhooks/stripe", [apigwv2.HttpMethod.POST]),
         ]:
             http_api.add_routes(
                 path=path,

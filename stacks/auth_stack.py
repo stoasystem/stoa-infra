@@ -22,7 +22,8 @@ class AuthStack(Stack):
             self,
             "StoaUserPool",
             user_pool_name=f"{resource_prefix}-users",
-            self_sign_up_enabled=True,
+            # Invite/admin-assignment only: Cognito refuses SignUp outright.
+            self_sign_up_enabled=False,
             sign_in_aliases=cognito.SignInAliases(email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             password_policy=cognito.PasswordPolicy(
@@ -31,7 +32,8 @@ class AuthStack(Stack):
                 require_uppercase=True,
                 require_digits=True,
             ),
-            account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            # No self-service recovery: a forgotten password is reset by an admin.
+            account_recovery=cognito.AccountRecovery.NONE,
             removal_policy=RemovalPolicy.RETAIN,
             custom_attributes={
                 "role": cognito.StringAttribute(mutable=False),

@@ -600,3 +600,73 @@ def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path
     # waiting longer than the deadline it exists to enforce.
     assert properties["ScheduleExpression"] == "rate(5 minutes)"
     assert properties["Target"]["DeadLetterConfig"]["Arn"], "a failed sweep would vanish"
+
+
+# The full unauthenticated surface of the API, as CloudFormation will build it.
+# Written out here rather than derived from the stack: a list computed from the
+# same code it checks would have agreed with the bug this guards against, where
+# /auth/invitations/claim was declared public in the backend, never added here,
+# and so answered 401 at the gateway with the handler never running.
+PUBLIC_ROUTE_KEYS = {
+    "GET /health",
+    "GET /teacher-applications/{application_id}/status",
+    "OPTIONS /{proxy+}",
+    "POST /analytics/events",
+    "POST /auth/email-verification/confirm",
+    "POST /auth/email-verification/resend",
+    "POST /auth/forgot-password",
+    "POST /auth/invitations/claim",
+    "POST /auth/login",
+    "POST /auth/login-code/confirm",
+    "POST /auth/login-code/request",
+    "POST /auth/logout",
+    "POST /auth/refresh",
+    "POST /auth/register",
+    "POST /auth/reset-password",
+    "POST /billing/webhooks/stripe",
+    "POST /teacher-applications",
+    "POST /teacher-applications/activation/claim",
+}
+
+
+def _routes_by_authorization(template: dict[str, Any]) -> dict[str, set[str]]:
+    grouped: dict[str, set[str]] = {}
+    for resource in _named_resources(template, "AWS::ApiGatewayV2::Route").values():
+        properties = resource["Properties"]
+        kind = properties.get("AuthorizationType") or "NONE"
+        grouped.setdefault(kind, set()).add(properties["RouteKey"])
+    return grouped
+
+
+def test_the_unauthenticated_route_surface_is_exactly_the_declared_one(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    grouped = _routes_by_authorization(_api_template(monkeypatch, tmp_path))
+
+    assert grouped["NONE"] == PUBLIC_ROUTE_KEYS
+
+
+def test_a_route_that_is_not_declared_public_falls_behind_the_authorizer(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The catch-all is what makes an unlisted route fail closed rather than open."""
+    grouped = _routes_by_authorization(_api_template(monkeypatch, tmp_path))
+
+    assert grouped["JWT"] == {
+        f"{method} /{{proxy+}}"
+        for method in ("GET", "POST", "PUT", "PATCH", "DELETE")
+    }
+
+
+def test_claiming_an_invitation_is_reachable_without_a_token_and_only_by_post(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A GET would carry the single-use token in the query string.
+
+    Query strings reach access logs and browser history, so the pairing the
+    other public loop applies must not be extended to this path.
+    """
+    grouped = _routes_by_authorization(_api_template(monkeypatch, tmp_path))
+
+    assert "POST /auth/invitations/claim" in grouped["NONE"]
+    assert "GET /auth/invitations/claim" not in grouped["NONE"]
