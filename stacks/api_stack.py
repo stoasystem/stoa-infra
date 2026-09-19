@@ -441,6 +441,15 @@ class ApiStack(Stack):
             "LambdaIntegration", self.api_production_alias
         )
 
+        # Four public routes are deliberately absent from this list and present on
+        # the deployed API: POST on /auth/email-verification/{resend,confirm} and
+        # /auth/login-code/{request,confirm}. They exist outside this stack's state,
+        # so declaring them here makes CloudFormation try to create what is already
+        # there and the whole deploy rolls back on a 409. Bringing them under
+        # management means importing them, not creating them — until then this list
+        # is the routes this stack owns, which is not the same as every public route
+        # the API answers. stoa-backend pins the latter from its own side.
+        #
         # The full unauthenticated surface, one entry per method the handler actually
         # answers. It used to pair POST with GET for each path, which published a
         # GET /auth/register, GET /auth/login and four more that no handler serves —
@@ -454,10 +463,6 @@ class ApiStack(Stack):
             ("/auth/refresh", [apigwv2.HttpMethod.POST]),
             ("/auth/forgot-password", [apigwv2.HttpMethod.POST]),
             ("/auth/reset-password", [apigwv2.HttpMethod.POST]),
-            ("/auth/email-verification/resend", [apigwv2.HttpMethod.POST]),
-            ("/auth/email-verification/confirm", [apigwv2.HttpMethod.POST]),
-            ("/auth/login-code/request", [apigwv2.HttpMethod.POST]),
-            ("/auth/login-code/confirm", [apigwv2.HttpMethod.POST]),
             # Logout carries the token in the body precisely so it does not need the
             # authorizer. Behind it, an expired session could never be revoked, which
             # is the case that most wants revoking.

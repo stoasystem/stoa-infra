@@ -602,7 +602,10 @@ def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path
     assert properties["Target"]["DeadLetterConfig"]["Arn"], "a failed sweep would vanish"
 
 
-# The full unauthenticated surface of the API, as CloudFormation will build it.
+# The routes this stack owns without an authorizer. Four more public routes exist
+# on the deployed API outside this stack's state (email verification and passwordless
+# login), so this is what CloudFormation builds, not every public route the API
+# answers. Adding them here would make the deploy collide with them.
 # Written out here rather than derived from the stack: a list computed from the
 # same code it checks would have agreed with the bug this guards against, where
 # /auth/invitations/claim was declared public in the backend, never added here,
@@ -612,13 +615,9 @@ PUBLIC_ROUTE_KEYS = {
     "GET /teacher-applications/{application_id}/status",
     "OPTIONS /{proxy+}",
     "POST /analytics/events",
-    "POST /auth/email-verification/confirm",
-    "POST /auth/email-verification/resend",
     "POST /auth/forgot-password",
     "POST /auth/invitations/claim",
     "POST /auth/login",
-    "POST /auth/login-code/confirm",
-    "POST /auth/login-code/request",
     "POST /auth/logout",
     "POST /auth/refresh",
     "POST /auth/register",
