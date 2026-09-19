@@ -64,12 +64,16 @@ class ApiStack(Stack):
             code=lambda_code,
             memory_size=1024,
             timeout=Duration.seconds(29),
-            # Adds Init Duration (cold start) to CloudWatch so the login
-            # latency investigation (BUG-008) can be measured, not guessed.
-            # arm64 in eu-central-2 is served by exactly one Insights layer: of the 17
-            # versions CDK knows, 498 is the only one with an ARM ARN for this region.
-            # Any other value fails at synth, which takes cdk deploy down with it.
-            insights_version=lambda_.LambdaInsightsVersion.VERSION_1_0_498_0,
+            # Lambda Insights is left off. It would add Init Duration to
+            # CloudWatch for the BUG-008 login latency work, but the layer lives
+            # in an account this stack's execution role may not read:
+            #   lambda:GetLayerVersion on
+            #   arn:aws:lambda:eu-central-2:033019950311:layer:LambdaInsightsExtension-Arm64:25
+            #   -> AccessDenied, and the whole deploy rolls back with it.
+            # Turning it back on means granting that action first. Note also that
+            # arm64 in eu-central-2 is served by exactly one version, 498: of the
+            # 17 CDK knows it is the only one with an ARM ARN here, and any other
+            # value fails at synth rather than at deploy.
             environment=merge_lambda_environment(
                 {
                     "ENVIRONMENT": env_name,
