@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """STOA CDK App — eu-central-2 (Zurich).
 
-Usage:
-  Production (default):
-    cdk deploy --all
-
-  Sandbox (isolated test environment, Stripe test keys, ENVIRONMENT=sandbox):
-    cdk deploy --context sandbox=true StoaSandboxAuthStack StoaSandboxDatabaseStack \\
-               StoaSandboxNotificationStack StoaSandboxApiStack
+One environment. `cdk deploy --all` deploys it.
 """
 import aws_cdk as cdk
 
@@ -22,8 +16,6 @@ from stacks.frontend_stack import FrontendStack
 from stacks.release_delivery_stack import ReleaseDeliveryStack
 
 app = cdk.App()
-
-is_sandbox = str(app.node.try_get_context("sandbox") or "").lower() in {"true", "1", "yes"}
 
 env = cdk.Environment(
     account=app.node.try_get_context("account") or "562923011260",
@@ -81,56 +73,21 @@ monitoring = MonitoringStack(
 
 frontend = FrontendStack(app, "StoaFrontendStack", env=env, tags=prod_tags)
 
-# ── Sandbox stacks (deployed only when --context sandbox=true) ─────────────────
-# Sandbox uses completely separate resources so production data is never touched.
-# ENVIRONMENT=sandbox makes the backend refuse sk_live_ Stripe keys.
-# Deploy: cdk deploy --context sandbox=true StoaSandboxAuthStack \
-#           StoaSandboxDatabaseStack StoaSandboxNotificationStack StoaSandboxApiStack
-
-sandbox_tags = {"Project": "stoa", "ManagedBy": "cdk", "Environment": "sandbox"}
-
-sandbox_auth = AuthStack(
-    app, "StoaSandboxAuthStack",
-    resource_prefix="stoa-sandbox",
-    env=env,
-    tags=sandbox_tags,
-)
-
-sandbox_database = DatabaseStack(
-    app, "StoaSandboxDatabaseStack",
-    table_name="stoa-sandbox",
-    env=env,
-    tags=sandbox_tags,
-)
-
-sandbox_storage = StorageStack(app, "StoaSandboxStorageStack", resource_prefix="stoa-sandbox", env=env, tags=sandbox_tags)
-
-sandbox_notification = NotificationStack(
-    app, "StoaSandboxNotificationStack",
-    resource_prefix="stoa-sandbox",
-    manage_ses_identity=False,
-    env=env,
-    tags=sandbox_tags,
-)
-
-sandbox_api = ApiStack(
-    app,
-    "StoaSandboxApiStack",
-    user_pool=sandbox_auth.user_pool,
-    student_client=sandbox_auth.student_client,
-    parent_client=sandbox_auth.parent_client,
-    teacher_client=sandbox_auth.teacher_client,
-    admin_client=sandbox_auth.admin_client,
-    table=sandbox_database.table,
-    images_bucket=sandbox_storage.images_bucket,
-    reports_bucket=sandbox_storage.reports_bucket,
-    immutable_evidence_bucket=sandbox_storage.immutable_evidence_bucket,
-    teacher_queue=sandbox_notification.teacher_queue,
-    env_name="sandbox",
-    resource_prefix="stoa-sandbox",
-    env=env,
-    tags=sandbox_tags,
-)
+# Card 015: there is one environment, and this used to declare a second.
+#
+# The shadow stacks carried the same resources under a `stoa-sandbox` prefix -
+# its own user pool, its own table, its own API - and sat idle from 2026-07-31.
+# Two sets of identically shaped resources is not free: a survey of the live
+# account read `UserPools[0]`, got the sandbox pool, and concluded the API had
+# no Cognito permissions at all. It had them, on the other pool.
+#
+# The stacks and their orphaned table, pool and buckets are deleted. The
+# contents are kept in `stoa-docs/影子环境留档/`. One bucket outlives this:
+# `stoa-sandbox-release-artifacts` holds six object-locked files until
+# 2026-10-28 and cannot be removed before then.
+#
+# A second environment, when there is a reason for one, gets declared again
+# here - deliberately, and not as a copy nobody deploys.
 
 release_delivery = ReleaseDeliveryStack(
     app,
