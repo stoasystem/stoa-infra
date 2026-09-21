@@ -186,6 +186,41 @@ class ApiStack(Stack):
             ),
         )
 
+        # Deletion is a resumable sweep, not one request's worth of work: the
+        # branches page through the table and require two clean passes. The API
+        # starts it in a background task and nothing continued it, so every
+        # deletion stopped after one lease with the profile still live and the
+        # address still claimed. This is what continues them.
+        self.account_deletion_function = lambda_.Function(
+            self,
+            "StoaAccountDeletionFunction",
+            function_name=f"{resource_prefix}-account-deletion",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="stoa.jobs.account_deletion.handler",
+            code=lambda_code,
+            memory_size=1024,
+            timeout=Duration.minutes(10),
+            environment=merge_lambda_environment(
+                {
+                    "ENVIRONMENT": env_name,
+                    "DYNAMODB_TABLE_NAME": table.table_name,
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                    "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                    "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
+                    "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
+                    "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                    "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
+                    **carried_audit_keys,
+                },
+                load_live_lambda_environment(
+                    f"{resource_prefix}-account-deletion", env_name=env_name
+                ),
+                env_name=env_name,
+            ),
+        )
+
         # Release traffic is pinned to immutable published versions. Promotion and
         # rollback move aliases only after the caller validates the version
         # CodeSha256 and the alias RevisionId.
@@ -222,6 +257,14 @@ class ApiStack(Stack):
             version=self.weekly_report_version,
         )
 
+        self.account_deletion_version = self.account_deletion_function.current_version
+        self.account_deletion_production_alias = lambda_.Alias(
+            self,
+            "StoaAccountDeletionProductionAlias",
+            alias_name="production",
+            version=self.account_deletion_version,
+        )
+
         self.dispatch_reconciler_version = self.dispatch_reconciler_function.current_version
         self.dispatch_reconciler_production_alias = lambda_.Alias(
             self,
@@ -230,6 +273,22 @@ class ApiStack(Stack):
             version=self.dispatch_reconciler_version,
         )
 
+        table.grant_read_write_data(self.account_deletion_function)
+        images_bucket.grant_read_write(self.account_deletion_function)
+        self._grant_report_artifact_read_write(reports_bucket, self.account_deletion_function)
+        self._grant_immutable_evidence_access(
+            immutable_evidence_bucket, self.account_deletion_function
+        )
+        # Deletion withdraws the sign-in it is deleting.
+        self.account_deletion_function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "cognito-idp:AdminGetUser",
+                "cognito-idp:AdminDisableUser",
+                "cognito-idp:AdminDeleteUser",
+                "cognito-idp:AdminUserGlobalSignOut",
+            ],
+            resources=[user_pool.user_pool_arn],
+        ))
         table.grant_read_write_data(self.dispatch_reconciler_function)
         table.grant_read_write_data(self.weekly_report_function)
         self._grant_report_artifact_read_write(reports_bucket, self.weekly_report_function)
@@ -320,6 +379,46 @@ class ApiStack(Stack):
                 f"arn:aws:ses:{self.region}:{self.account}:identity/stoaedu.ch",
             ],
         ))
+
+        account_deletion_dlq = sqs.Queue(
+            self,
+            "AccountDeletionDLQ",
+            queue_name=f"{resource_prefix}-account-deletion-dlq",
+            retention_period=Duration.days(14),
+        )
+        account_deletion_scheduler_role = iam.Role(
+            self,
+            "AccountDeletionSchedulerRole",
+            assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
+        )
+        self.account_deletion_production_alias.grant_invoke(account_deletion_scheduler_role)
+        account_deletion_dlq.grant_send_messages(account_deletion_scheduler_role)
+
+        scheduler.CfnSchedule(
+            self,
+            "AccountDeletionSchedule",
+            name=f"{resource_prefix}-account-deletion",
+            group_name=f"{resource_prefix}-schedules",
+            description="Continue account deletion commands that are still running.",
+            # Deletion is a person asking to be gone. Five minutes is how long one
+            # command waits for its next pass, not how long deletion takes.
+            schedule_expression="rate(5 minutes)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.account_deletion_production_alias.function_arn,
+                role_arn=account_deletion_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"account_deletion","limit":25}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=3_600,
+                    maximum_retry_attempts=3,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=account_deletion_dlq.queue_arn,
+                ),
+            ),
+        )
 
         weekly_report_dlq = sqs.Queue(
             self,
