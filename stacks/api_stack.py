@@ -324,6 +324,7 @@ class ApiStack(Stack):
                                 self.api_function.function_arn,
                                 self.weekly_report_function.function_arn,
                                 self.dispatch_reconciler_function.function_arn,
+                                self.account_deletion_function.function_arn,
                             ],
                         },
                         {
@@ -344,6 +345,8 @@ class ApiStack(Stack):
                                 self.weekly_report_production_alias.function_arn,
                                 self.dispatch_reconciler_function.function_arn,
                                 self.dispatch_reconciler_production_alias.function_arn,
+                                self.account_deletion_function.function_arn,
+                                self.account_deletion_production_alias.function_arn,
                             ],
                         },
                     ],
