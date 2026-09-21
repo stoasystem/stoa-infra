@@ -9,7 +9,14 @@ import subprocess
 import sys
 
 
-FUNCTIONS = ("stoa-api", "stoa-weekly-report", "stoa-dispatch-reconciler")
+FUNCTIONS = (
+    "stoa-api",
+    "stoa-weekly-report",
+    "stoa-dispatch-reconciler",
+    # A function that has not been deployed yet is snapshotted as null; a name
+    # missing from the snapshot altogether fails the deploy.
+    "stoa-account-deletion",
+)
 
 
 def snapshot_lambda_environments(

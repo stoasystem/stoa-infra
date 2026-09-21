@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,10 @@ def test_snapshot_script_writes_function_maps_without_printing_values(
 
     def fake_run(argv, text=True):
         name = argv[argv.index("--function-name") + 1]
+        if name not in payloads:
+            # What a function CDK is about to create for the first time looks
+            # like: queried, not there yet, recorded as null rather than absent.
+            raise subprocess.CalledProcessError(254, argv)
         return json.dumps(payloads[name])
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
