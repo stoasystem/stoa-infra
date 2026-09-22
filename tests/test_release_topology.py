@@ -691,3 +691,36 @@ def test_the_user_pool_groups_are_not_declared_here(monkeypatch: Any, tmp_path: 
     template = Template.from_stack(AuthStack(app, "GroupFreeAuth", env=env)).to_json()
 
     assert _named_resources(template, "AWS::Cognito::UserPoolGroup") == {}
+
+
+def test_gateway_records_every_request_without_recording_what_was_said(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Nothing recorded what the API was asked for or what it answered.
+
+    The Lambda log group held START, END and REPORT and not one application
+    line, and the stage had no access log at all, so a report that a page "does
+    nothing" could only be chased by reproducing it in a browser. The log is
+    also the reason to be careful about what goes in it: this pins the fields to
+    who asked for what and what came back, and pins out the request body, the
+    response body and the Authorization header.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    stages = _named_resources(template, "AWS::ApiGatewayV2::Stage")
+    assert stages, "the HTTP API has no stage"
+    settings = [
+        stage["Properties"].get("AccessLogSettings") for stage in stages.values()
+    ]
+    assert all(setting is not None for setting in settings), "a stage logs nothing"
+
+    groups = _named_resources(template, "AWS::Logs::LogGroup")
+    assert groups, "access logs have nowhere to go"
+
+    for setting in settings:
+        recorded = json.loads(setting["Format"])
+        assert {"requestId", "routeKey", "status", "responseLatency"} <= set(recorded)
+        # A correlation handle, not an identity: the subject, never the address.
+        assert recorded["sub"] == "$context.authorizer.claims.sub"
+        body = " ".join(recorded.values()).lower()
+        for forbidden in ("requestbody", "responsebody", "header.authorization"):
+            assert forbidden not in body.replace("$context.", "")

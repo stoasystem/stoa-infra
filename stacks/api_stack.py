@@ -1,7 +1,10 @@
 """API Gateway HTTP API + Lambda (FastAPI/Mangum) + WAF."""
+import json
+
 from aws_cdk import (
     AssetHashType,
     CfnOutput,
+    RemovalPolicy,
     Stack,
     Duration,
     aws_lambda as lambda_,
@@ -13,6 +16,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_sqs as sqs,
     aws_iam as iam,
+    aws_logs as logs,
     aws_scheduler as scheduler,
 )
 from constructs import Construct
@@ -542,6 +546,50 @@ class ApiStack(Stack):
             ),
         )
         self.http_api = http_api
+
+        # Nothing recorded what the gateway was asked for or what it answered.
+        # The Lambda's own log group held START, END and REPORT and not one line
+        # from the application, and the stage had no access log at all, so a
+        # report that a page "does nothing" could only be chased by reproducing it
+        # in a browser. One line per request, with the correlation id the handler
+        # already puts in its refusals, is what makes that a lookup instead.
+        access_logs = logs.LogGroup(
+            self,
+            "StoaHttpApiAccessLogs",
+            log_group_name=f"/aws/apigateway/{resource_prefix}-api/access",
+            retention=logs.RetentionDays.THREE_MONTHS,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        self.api_access_logs = access_logs
+
+        default_stage = http_api.default_stage
+        if default_stage is not None:
+            cfn_stage = default_stage.node.default_child
+            cfn_stage.access_log_settings = apigwv2.CfnStage.AccessLogSettingsProperty(
+                destination_arn=access_logs.log_group_arn,
+                # No request or response body, and no Authorization header: this
+                # is who asked for what and what came back, not what was said.
+                format=json.dumps(
+                    {
+                        "requestId": "$context.requestId",
+                        "requestTime": "$context.requestTime",
+                        "httpMethod": "$context.httpMethod",
+                        "routeKey": "$context.routeKey",
+                        "path": "$context.path",
+                        "status": "$context.status",
+                        "responseLatency": "$context.responseLatency",
+                        "responseLength": "$context.responseLength",
+                        "integrationStatus": "$context.integration.status",
+                        "integrationError": "$context.integration.error",
+                        "authorizerError": "$context.authorizer.error",
+                        "userAgent": "$context.identity.userAgent",
+                        "sourceIp": "$context.identity.sourceIp",
+                        # The Cognito subject, so a refusal can be traced to an
+                        # account without the account's address being written down.
+                        "sub": "$context.authorizer.claims.sub",
+                    }
+                ),
+            )
 
         lambda_integration = integrations.HttpLambdaIntegration(
             "LambdaIntegration", self.api_production_alias
