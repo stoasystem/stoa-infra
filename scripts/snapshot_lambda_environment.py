@@ -16,6 +16,7 @@ FUNCTIONS = (
     # A function that has not been deployed yet is snapshotted as null; a name
     # missing from the snapshot altogether fails the deploy.
     "stoa-account-deletion",
+    "stoa-conversation-generation",
 )
 
 

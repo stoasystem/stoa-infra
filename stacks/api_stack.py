@@ -225,6 +225,45 @@ class ApiStack(Stack):
             ),
         )
 
+        # #18: an answer that cannot finish inside the API's 29 seconds. The
+        # request persists the student's message and command and returns; this
+        # function claims the command and generates the answer. It has no
+        # handler until the backend ships E11, so nothing invokes it yet and
+        # its sweep below is created switched off.
+        self.conversation_generation_function = lambda_.Function(
+            self,
+            "StoaConversationGenerationFunction",
+            function_name=f"{resource_prefix}-conversation-generation",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="stoa.jobs.conversation_generation.handler",
+            code=lambda_code,
+            memory_size=1024,
+            # The model's 90-second budget plus room to store the answer, with
+            # margin: far beyond the API's 29 seconds, which is the point.
+            timeout=Duration.minutes(3),
+            environment=merge_lambda_environment(
+                {
+                    "ENVIRONMENT": env_name,
+                    "DYNAMODB_TABLE_NAME": table.table_name,
+                    "S3_IMAGES_BUCKET": images_bucket.bucket_name,
+                    "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
+                    "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
+                    "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
+                    "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
+                    "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+                    "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
+                    **carried_audit_keys,
+                },
+                load_live_lambda_environment(
+                    f"{resource_prefix}-conversation-generation", env_name=env_name
+                ),
+                env_name=env_name,
+            ),
+        )
+
         # Release traffic is pinned to immutable published versions. Promotion and
         # rollback move aliases only after the caller validates the version
         # CodeSha256 and the alias RevisionId.
@@ -276,6 +315,24 @@ class ApiStack(Stack):
             alias_name="production",
             version=self.dispatch_reconciler_version,
         )
+
+        self.conversation_generation_version = (
+            self.conversation_generation_function.current_version
+        )
+        self.conversation_generation_production_alias = lambda_.Alias(
+            self,
+            "StoaConversationGenerationProductionAlias",
+            alias_name="production",
+            version=self.conversation_generation_version,
+        )
+
+        table.grant_read_write_data(self.conversation_generation_function)
+        # Reads the attachment text the request already extracted; never writes.
+        images_bucket.grant_read(self.conversation_generation_function)
+        # Only the permission, not the worker's name: an environment change
+        # would publish a new API version and move its production alias, and
+        # nothing reads the name until E11, which adds it.
+        self.conversation_generation_production_alias.grant_invoke(self.api_production_alias)
 
         table.grant_read_write_data(self.account_deletion_function)
         images_bucket.grant_read_write(self.account_deletion_function)
@@ -329,6 +386,7 @@ class ApiStack(Stack):
                                 self.weekly_report_function.function_arn,
                                 self.dispatch_reconciler_function.function_arn,
                                 self.account_deletion_function.function_arn,
+                                self.conversation_generation_function.function_arn,
                             ],
                         },
                         {
@@ -351,6 +409,8 @@ class ApiStack(Stack):
                                 self.dispatch_reconciler_production_alias.function_arn,
                                 self.account_deletion_function.function_arn,
                                 self.account_deletion_production_alias.function_arn,
+                                self.conversation_generation_function.function_arn,
+                                self.conversation_generation_production_alias.function_arn,
                             ],
                         },
                     ],
@@ -371,6 +431,13 @@ class ApiStack(Stack):
         self.weekly_report_function.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+                "bedrock:CountTokens",
+            ],
+            resources=["*"],
+        ))
+        self.conversation_generation_function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
                 "bedrock:InvokeModelWithResponseStream",
                 "bedrock:CountTokens",
             ],
@@ -423,6 +490,53 @@ class ApiStack(Stack):
                 ),
                 dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
                     arn=account_deletion_dlq.queue_arn,
+                ),
+            ),
+        )
+
+        conversation_generation_dlq = sqs.Queue(
+            self,
+            "ConversationGenerationDLQ",
+            queue_name=f"{resource_prefix}-conversation-generation-dlq",
+            retention_period=Duration.days(14),
+        )
+        conversation_generation_scheduler_role = iam.Role(
+            self,
+            "ConversationGenerationSchedulerRole",
+            assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
+        )
+        self.conversation_generation_production_alias.grant_invoke(
+            conversation_generation_scheduler_role
+        )
+        conversation_generation_dlq.grant_send_messages(conversation_generation_scheduler_role)
+
+        scheduler.CfnSchedule(
+            self,
+            "ConversationGenerationSchedule",
+            name=f"{resource_prefix}-conversation-generation",
+            group_name=f"{resource_prefix}-schedules",
+            description=(
+                "Recover conversation commands whose invoke was lost or whose lease expired."
+            ),
+            # The asynchronous invoke is the normal path; this covers a command
+            # written before its invoke ran, and an expired lease. E11 sets the
+            # lease no shorter than this period.
+            schedule_expression="rate(5 minutes)",
+            # Switched on with E11, when the handler exists.
+            state="DISABLED",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.conversation_generation_production_alias.function_arn,
+                role_arn=conversation_generation_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"conversation_generation_sweep"}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=3_600,
+                    maximum_retry_attempts=3,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=conversation_generation_dlq.queue_arn,
                 ),
             ),
         )

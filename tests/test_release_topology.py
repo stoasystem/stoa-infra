@@ -724,3 +724,126 @@ def test_gateway_records_every_request_without_recording_what_was_said(
         body = " ".join(recorded.values()).lower()
         for forbidden in ("requestbody", "responsebody", "header.authorization"):
             assert forbidden not in body.replace("$context.", "")
+
+
+# --- #18 (E12): the conversation generation worker ---------------------------
+
+
+WORKER = "stoa-conversation-generation"
+
+
+def _worker(template: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return _resource_by_property(template, "AWS::Lambda::Function", "FunctionName", WORKER)
+
+
+def _statements_for_function_role(
+    template: dict[str, Any], function: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Every policy statement attached to the role a function runs as."""
+    role_id = function["Properties"]["Role"]["Fn::GetAtt"][0]
+    return [
+        statement
+        for policy in _named_resources(template, "AWS::IAM::Policy").values()
+        if {"Ref": role_id} in policy["Properties"].get("Roles", [])
+        for statement in _statements(policy)
+    ]
+
+
+def test_the_generation_worker_outlives_the_api_request(monkeypatch: Any, tmp_path: Path) -> None:
+    """An answer that cannot finish inside 29 seconds needs a function that can."""
+    template = _api_template(monkeypatch, tmp_path)
+    _, worker = _worker(template)
+    _, api = _resource_by_property(template, "AWS::Lambda::Function", "FunctionName", "stoa-api")
+
+    properties = worker["Properties"]
+    assert properties["Handler"] == "stoa.jobs.conversation_generation.handler"
+    assert properties["Runtime"] == "python3.12"
+    assert properties["Architectures"] == ["arm64"]
+    assert properties["Code"] == api["Properties"]["Code"]
+    assert properties["MemorySize"] == api["Properties"]["MemorySize"]
+    assert properties["Timeout"] >= 4 * api["Properties"]["Timeout"]
+
+
+def test_the_generation_worker_is_reached_only_through_its_production_alias(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    template = _api_template(monkeypatch, tmp_path)
+    worker_id, _ = _worker(template)
+    aliases = [
+        resource
+        for resource in _named_resources(template, "AWS::Lambda::Alias").values()
+        if worker_id in json.dumps(resource["Properties"]["FunctionName"])
+    ]
+    assert [alias["Properties"]["Name"] for alias in aliases] == ["production"]
+    alias_id, _ = _alias_by_function_and_name(template, WORKER, "production")
+
+    sweeps = [
+        resource
+        for resource in _named_resources(template, "AWS::Scheduler::Schedule").values()
+        if WORKER in str(resource["Properties"].get("Name", ""))
+    ]
+    assert len(sweeps) == 1
+    sweep = sweeps[0]["Properties"]
+    assert alias_id in json.dumps(sweep["Target"]["Arn"])
+    assert sweep["Target"]["DeadLetterConfig"]["Arn"]
+    # Created switched off: the handler arrives with E11, and a sweep that
+    # fires at a missing module is five-minutely noise in the DLQ until then.
+    assert sweep["State"] == "DISABLED"
+
+
+def test_the_api_may_invoke_the_worker_alias_without_a_new_api_version(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    template = _api_template(monkeypatch, tmp_path)
+    alias_id, _ = _alias_by_function_and_name(template, WORKER, "production")
+    _, api = _resource_by_property(template, "AWS::Lambda::Function", "FunctionName", "stoa-api")
+
+    # The API's own configuration is untouched until E11 gives it the name, so
+    # deploying this does not publish a new API version.
+    assert "CONVERSATION_GENERATION_FUNCTION_NAME" not in api["Properties"]["Environment"]["Variables"]
+    invoke_grants = [
+        statement
+        for statement in _statements_for_function_role(template, api)
+        if statement.get("Action") == "lambda:InvokeFunction"
+        and alias_id in json.dumps(statement.get("Resource"))
+    ]
+    assert invoke_grants, "the API role cannot invoke the worker alias"
+
+
+def test_the_worker_can_stream_from_the_model_and_use_the_table(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    template = _api_template(monkeypatch, tmp_path)
+    _, worker = _worker(template)
+    actions: set[str] = set()
+    for statement in _statements_for_function_role(template, worker):
+        listed = statement.get("Action")
+        actions.update(listed if isinstance(listed, list) else [listed])
+    assert {"bedrock:InvokeModelWithResponseStream", "bedrock:CountTokens"} <= actions
+    assert {"dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"} <= actions
+    assert "s3:GetObject*" in actions
+
+
+def test_the_deploy_role_can_update_the_worker(monkeypatch: Any, tmp_path: Path) -> None:
+    template = _api_template(monkeypatch, tmp_path)
+    policy = next(
+        resource
+        for resource in _named_resources(template, "AWS::IAM::Policy").values()
+        if resource["Properties"].get("PolicyName") == "stoa-github-backend-alias-update"
+    )
+    function_update, alias_update = _statements(policy)
+    assert "StoaConversationGenerationFunction" in json.dumps(function_update["Resource"])
+    assert "StoaConversationGenerationProductionAlias" in json.dumps(alias_update["Resource"])
+
+
+def test_the_live_environment_snapshot_asks_about_the_worker() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "snapshot_lambda_environment",
+        Path(__file__).resolve().parents[1] / "scripts" / "snapshot_lambda_environment.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert WORKER in module.FUNCTIONS
