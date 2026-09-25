@@ -14,6 +14,7 @@ from stacks.auth_stack import AuthStack
 from stacks.database_stack import DatabaseStack
 from stacks.frontend_stack import FrontendStack
 from stacks.lambda_dist_guard import LambdaDistAsset
+from stacks.monitoring_stack import MonitoringStack
 from stacks.notification_stack import NotificationStack
 from stacks.release_delivery_stack import ReleaseDeliveryStack
 from stacks.storage_stack import StorageStack
@@ -786,21 +787,22 @@ def test_the_generation_worker_is_reached_only_through_its_production_alias(
     sweep = sweeps[0]["Properties"]
     assert alias_id in json.dumps(sweep["Target"]["Arn"])
     assert sweep["Target"]["DeadLetterConfig"]["Arn"]
-    # Created switched off: the handler arrives with E11, and a sweep that
-    # fires at a missing module is five-minutely noise in the DLQ until then.
-    assert sweep["State"] == "DISABLED"
+    # On since E22: the handler shipped with E20, and the lease (300 s) is no
+    # shorter than the sweep's period.
+    assert sweep["State"] == "ENABLED"
 
 
-def test_the_api_may_invoke_the_worker_alias_without_a_new_api_version(
+def test_the_api_is_told_the_worker_alias_and_may_invoke_it(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     template = _api_template(monkeypatch, tmp_path)
     alias_id, _ = _alias_by_function_and_name(template, WORKER, "production")
     _, api = _resource_by_property(template, "AWS::Lambda::Function", "FunctionName", "stoa-api")
 
-    # The API's own configuration is untouched until E11 gives it the name, so
-    # deploying this does not publish a new API version.
-    assert "CONVERSATION_GENERATION_FUNCTION_NAME" not in api["Properties"]["Environment"]["Variables"]
+    # E22: the name E21's switch reads. Nothing reads it before E21, so it
+    # changes nothing but the API's version.
+    named = api["Properties"]["Environment"]["Variables"]["CONVERSATION_GENERATION_FUNCTION_NAME"]
+    assert named == {"Ref": alias_id}
     invoke_grants = [
         statement
         for statement in _statements_for_function_role(template, api)
@@ -819,7 +821,12 @@ def test_the_worker_can_stream_from_the_model_and_use_the_table(
     for statement in _statements_for_function_role(template, worker):
         listed = statement.get("Action")
         actions.update(listed if isinstance(listed, list) else [listed])
-    assert {"bedrock:InvokeModelWithResponseStream", "bedrock:CountTokens"} <= actions
+    # Exactly what the worker calls: it always streams (the conversation path
+    # passes `on_step`), so plain InvokeModel is not granted.
+    assert {action for action in actions if action.startswith("bedrock:")} == {
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:CountTokens",
+    }
     assert {"dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"} <= actions
     assert "s3:GetObject*" in actions
 
@@ -847,3 +854,52 @@ def test_the_live_environment_snapshot_asks_about_the_worker() -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert WORKER in module.FUNCTIONS
+
+
+def test_every_function_answers_with_the_one_model(monkeypatch: Any, tmp_path: Path) -> None:
+    """The model id is written once, so choosing another is a one-line change."""
+    template = _api_template(monkeypatch, tmp_path)
+    models = {
+        resource["Properties"]["FunctionName"]: resource["Properties"]["Environment"]["Variables"][
+            "BEDROCK_MODEL_ID"
+        ]
+        for resource in _named_resources(template, "AWS::Lambda::Function").values()
+        if "BEDROCK_MODEL_ID" in resource["Properties"].get("Environment", {}).get("Variables", {})
+    }
+    assert {"stoa-api", "stoa-weekly-report", WORKER} <= set(models)
+    assert len(set(models.values())) == 1
+
+    source = (Path(__file__).resolve().parents[1] / "stacks" / "api_stack.py").read_text()
+    assert source.count(next(iter(models.values()))) == 1
+
+
+def test_a_failing_worker_and_a_lost_sweep_page_someone(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    app, _, api = _api_stack(monkeypatch, tmp_path)
+    monitoring = MonitoringStack(
+        app,
+        "TestMonitoring",
+        api_function=api.api_function,
+        http_api=api.http_api,
+        weekly_report_function=api.weekly_report_function,
+        conversation_generation_function=api.conversation_generation_function,
+        conversation_generation_dlq=api.conversation_generation_dlq,
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
+    template = Template.from_stack(monitoring).to_json()
+    alarms = {
+        resource["Properties"]["AlarmName"]: resource["Properties"]
+        for resource in _named_resources(template, "AWS::CloudWatch::Alarm").values()
+    }
+    topic_id = next(iter(_named_resources(template, "AWS::SNS::Topic")))
+
+    worker_errors = alarms["stoa-conversation-generation-errors"]
+    assert worker_errors["MetricName"] == "Errors"
+    assert worker_errors["Threshold"] == 1
+    dlq = alarms["stoa-conversation-generation-dlq-messages"]
+    assert dlq["MetricName"] == "ApproximateNumberOfMessagesVisible"
+    assert dlq["Threshold"] == 1
+    assert dlq["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+    for alarm in (worker_errors, dlq):
+        assert alarm["AlarmActions"] == [{"Ref": topic_id}]

@@ -67,6 +67,8 @@ monitoring = MonitoringStack(
     api_function=api.api_function,
     http_api=api.http_api,
     weekly_report_function=api.weekly_report_function,
+    conversation_generation_function=api.conversation_generation_function,
+    conversation_generation_dlq=api.conversation_generation_dlq,
     env=env,
     tags=prod_tags,
 )

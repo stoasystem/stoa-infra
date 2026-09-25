@@ -29,6 +29,11 @@ from stacks.lambda_environment import (
 )
 
 
+# The one model every function answers with. Written once, so the choice of
+# model or inference profile (open decision Q4) is a one-line change.
+BEDROCK_MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
+
+
 class ApiStack(Stack):
     def __init__(
         self,
@@ -98,7 +103,7 @@ class ApiStack(Stack):
                     "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
                     "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                     "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
-                    "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+                    "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                     "APP_BASE_URL": (
                         "https://app.stoaedu.ch" if env_name == "production" else "http://localhost:5173"
@@ -134,7 +139,7 @@ class ApiStack(Stack):
                     "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                     "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
                     "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
-                    "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+                    "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                 },
                 load_live_lambda_environment(f"{resource_prefix}-weekly-report", env_name=env_name),
@@ -253,7 +258,7 @@ class ApiStack(Stack):
                     "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
                     "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                     "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
-                    "BEDROCK_MODEL_ID": "eu.anthropic.claude-sonnet-4-6",
+                    "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                     **carried_audit_keys,
                 },
@@ -329,9 +334,12 @@ class ApiStack(Stack):
         table.grant_read_write_data(self.conversation_generation_function)
         # Reads the attachment text the request already extracted; never writes.
         images_bucket.grant_read(self.conversation_generation_function)
-        # Only the permission, not the worker's name: an environment change
-        # would publish a new API version and move its production alias, and
-        # nothing reads the name until E11, which adds it.
+        # The name E21's switch reads (E22). Adding it publishes a new API
+        # version; nothing reads it before E21.
+        self.api_function.add_environment(
+            "CONVERSATION_GENERATION_FUNCTION_NAME",
+            self.conversation_generation_production_alias.function_arn,
+        )
         self.conversation_generation_production_alias.grant_invoke(self.api_production_alias)
 
         table.grant_read_write_data(self.account_deletion_function)
@@ -436,6 +444,8 @@ class ApiStack(Stack):
             ],
             resources=["*"],
         ))
+        # Only what the worker calls: the conversation path always streams, so
+        # plain InvokeModel is not granted (checked against E20, for E22).
         self.conversation_generation_function.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "bedrock:InvokeModelWithResponseStream",
@@ -500,6 +510,7 @@ class ApiStack(Stack):
             queue_name=f"{resource_prefix}-conversation-generation-dlq",
             retention_period=Duration.days(14),
         )
+        self.conversation_generation_dlq = conversation_generation_dlq
         conversation_generation_scheduler_role = iam.Role(
             self,
             "ConversationGenerationSchedulerRole",
@@ -519,11 +530,11 @@ class ApiStack(Stack):
                 "Recover conversation commands whose invoke was lost or whose lease expired."
             ),
             # The asynchronous invoke is the normal path; this covers a command
-            # written before its invoke ran, and an expired lease. E11 sets the
-            # lease no shorter than this period.
+            # written before its invoke ran, and an expired lease. The lease
+            # (300 s since E20) is no shorter than this period.
             schedule_expression="rate(5 minutes)",
-            # Switched on with E11, when the handler exists.
-            state="DISABLED",
+            # On since E22: the handler shipped with E20.
+            state="ENABLED",
             flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
                 mode="OFF",
             ),

@@ -9,6 +9,7 @@ from aws_cdk import (
     aws_cloudwatch_actions as cw_actions,
     aws_lambda as lambda_,
     aws_sns as sns,
+    aws_sqs as sqs,
 )
 from constructs import Construct
 
@@ -21,6 +22,8 @@ class MonitoringStack(Stack):
         api_function: lambda_.Function,
         http_api: apigwv2.HttpApi,
         weekly_report_function: Optional[lambda_.Function] = None,
+        conversation_generation_function: Optional[lambda_.Function] = None,
+        conversation_generation_dlq: Optional[sqs.IQueue] = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -68,6 +71,38 @@ class MonitoringStack(Stack):
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
             )
             report_error_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        # #18: the worker that writes answers outside the request. A failed
+        # invocation is a student waiting on an answer that will not come; a
+        # message in the sweep's DLQ is a sweep the Scheduler gave up on.
+        if conversation_generation_function is not None:
+            worker_error_alarm = cw.Alarm(
+                self,
+                "ConversationGenerationErrorAlarm",
+                alarm_name="stoa-conversation-generation-errors",
+                metric=conversation_generation_function.metric_errors(
+                    period=Duration.minutes(5)
+                ),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            )
+            worker_error_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+        if conversation_generation_dlq is not None:
+            worker_dlq_alarm = cw.Alarm(
+                self,
+                "ConversationGenerationDlqAlarm",
+                alarm_name="stoa-conversation-generation-dlq-messages",
+                metric=conversation_generation_dlq.metric_approximate_number_of_messages_visible(
+                    period=Duration.minutes(5)
+                ),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            )
+            worker_dlq_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
         # Dashboard
         dashboard = cw.Dashboard(self, "StoaDashboard", dashboard_name="STOA-Overview")
