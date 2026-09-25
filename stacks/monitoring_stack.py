@@ -8,6 +8,7 @@ from aws_cdk import (
     aws_cloudwatch as cw,
     aws_cloudwatch_actions as cw_actions,
     aws_lambda as lambda_,
+    aws_logs as logs,
     aws_sns as sns,
     aws_sqs as sqs,
 )
@@ -89,6 +90,37 @@ class MonitoringStack(Stack):
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
             )
             worker_error_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+            # E24: the sweep released a reservation nothing else would settle -
+            # a model call whose answer was lost, or one kept when no time was
+            # left to call and never retried - charging an unknown cost at the
+            # ceiling. Expected to be rare; each one is worth a look.
+            settled = logs.MetricFilter(
+                self,
+                "NeedsReconciliationSettledFilter",
+                log_group=logs.LogGroup.from_log_group_name(
+                    self,
+                    "ConversationGenerationLogs",
+                    f"/aws/lambda/{conversation_generation_function.function_name}",
+                ),
+                metric_namespace="Stoa/Conversations",
+                metric_name="NeedsReconciliationSettled",
+                filter_pattern=logs.FilterPattern.literal(
+                    '"event_category=conversation_ai_needs_reconciliation_settled"'
+                ),
+                metric_value="1",
+            )
+            settled_alarm = cw.Alarm(
+                self,
+                "NeedsReconciliationSettledAlarm",
+                alarm_name="stoa-conversation-needs-reconciliation-settled",
+                metric=settled.metric(statistic="Sum", period=Duration.minutes(5)),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            )
+            settled_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
         if conversation_generation_dlq is not None:
             worker_dlq_alarm = cw.Alarm(
                 self,

@@ -901,5 +901,17 @@ def test_a_failing_worker_and_a_lost_sweep_page_someone(
     assert dlq["MetricName"] == "ApproximateNumberOfMessagesVisible"
     assert dlq["Threshold"] == 1
     assert dlq["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
-    for alarm in (worker_errors, dlq):
+    settled = alarms["stoa-conversation-needs-reconciliation-settled"]
+    assert settled["MetricName"] == "NeedsReconciliationSettled"
+    assert settled["Namespace"] == "Stoa/Conversations"
+    assert settled["Threshold"] == 1
+    assert settled["Statistic"] == "Sum"
+    for alarm in (worker_errors, dlq, settled):
         assert alarm["AlarmActions"] == [{"Ref": topic_id}]
+    [metric_filter] = _named_resources(template, "AWS::Logs::MetricFilter").values()
+    assert metric_filter["Properties"]["FilterPattern"] == (
+        '"event_category=conversation_ai_needs_reconciliation_settled"'
+    )
+    [transformation] = metric_filter["Properties"]["MetricTransformations"]
+    assert transformation["MetricName"] == "NeedsReconciliationSettled"
+    assert transformation["MetricNamespace"] == "Stoa/Conversations"
