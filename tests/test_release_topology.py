@@ -577,33 +577,6 @@ def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path
     assert properties["Target"]["DeadLetterConfig"]["Arn"], "a failed sweep would vanish"
 
 
-def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path: Path) -> None:
-    """Dispatch failures and unaccepted offers used to leave a student on nobody."""
-    template = _api_template(monkeypatch, tmp_path)
-
-    functions = _named_resources(template, "AWS::Lambda::Function")
-    reconciler = [
-        resource
-        for resource in functions.values()
-        if resource["Properties"].get("Handler") == "stoa.jobs.dispatch_reconciler.handler"
-    ]
-    assert len(reconciler) == 1, "the dispatch sweep is not deployed"
-
-    schedules = _named_resources(template, "AWS::Scheduler::Schedule")
-    sweeps = [
-        resource
-        for resource in schedules.values()
-        if "dispatch-reconciler" in str(resource["Properties"].get("Name", ""))
-    ]
-    assert len(sweeps) == 1, "the dispatch sweep has no schedule"
-
-    properties = sweeps[0]["Properties"]
-    # A teacher has ten minutes to accept; a slower sweep would leave a student
-    # waiting longer than the deadline it exists to enforce.
-    assert properties["ScheduleExpression"] == "rate(5 minutes)"
-    assert properties["Target"]["DeadLetterConfig"]["Arn"], "a failed sweep would vanish"
-
-
 # The routes this stack owns without an authorizer. Four more public routes exist
 # on the deployed API outside this stack's state (email verification and passwordless
 # login), so this is what CloudFormation builds, not every public route the API

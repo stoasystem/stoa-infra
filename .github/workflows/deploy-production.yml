@@ -83,6 +83,13 @@ jobs:
           uv --version
           .venv/bin/python -c 'from stacks.lambda_dist_guard import verify_lambda_dist; verify_lambda_dist()'
 
+      # The only job a push to main runs, so the only place these tests can stop
+      # a deploy. deploy.yml runs one of the two files and only when dispatched.
+      # Before the credentials on purpose: the tests must not reach AWS.
+      - name: Run infra tests
+        working-directory: stoa-infra
+        run: uv run --frozen pytest -q tests/
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
         with:
