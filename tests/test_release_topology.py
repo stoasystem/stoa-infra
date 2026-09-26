@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 from pathlib import Path
 from typing import Any
 
@@ -873,10 +874,10 @@ def test_every_function_answers_with_the_one_model(monkeypatch: Any, tmp_path: P
     assert source.count(next(iter(models.values()))) == 1
 
 
-def test_a_failing_worker_and_a_lost_sweep_page_someone(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
+def _monitoring_template(monkeypatch: Any, tmp_path: Path) -> dict[str, Any]:
+    """The monitoring stack wired the way app.py wires it."""
     app, _, api = _api_stack(monkeypatch, tmp_path)
+    notification = app.node.find_child("TestNotification")
     monitoring = MonitoringStack(
         app,
         "TestMonitoring",
@@ -884,14 +885,147 @@ def test_a_failing_worker_and_a_lost_sweep_page_someone(
         http_api=api.http_api,
         weekly_report_function=api.weekly_report_function,
         conversation_generation_function=api.conversation_generation_function,
-        conversation_generation_dlq=api.conversation_generation_dlq,
+        dispatch_reconciler_function=api.dispatch_reconciler_function,
+        account_deletion_function=api.account_deletion_function,
+        dead_letter_queues={
+            "conversation-generation": api.conversation_generation_dlq,
+            "weekly-report": api.weekly_report_dlq,
+            "dispatch-reconciler": api.dispatch_reconciler_dlq,
+            "account-deletion": api.account_deletion_dlq,
+            "teacher-escalation": notification.teacher_escalation_dlq,
+        },
         env=cdk.Environment(account=ACCOUNT, region=REGION),
     )
-    template = Template.from_stack(monitoring).to_json()
-    alarms = {
+    return Template.from_stack(monitoring).to_json()
+
+
+def _alarms(template: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
         resource["Properties"]["AlarmName"]: resource["Properties"]
         for resource in _named_resources(template, "AWS::CloudWatch::Alarm").values()
     }
+
+
+def test_every_alarm_reaches_a_person(monkeypatch: Any, tmp_path: Path) -> None:
+    """Card 111: stoa-alerts had no subscriber and p99 had no action, so no
+    alarm reached anyone. An alarm without an action is a graph, not an alert."""
+    template = _monitoring_template(monkeypatch, tmp_path)
+    topic_id = next(iter(_named_resources(template, "AWS::SNS::Topic")))
+
+    [subscription] = _named_resources(template, "AWS::SNS::Subscription").values()
+    assert subscription["Properties"]["Protocol"] == "email"
+    assert subscription["Properties"]["TopicArn"] == {"Ref": topic_id}
+    [(parameter_id, parameter)] = [
+        (logical_id, parameter)
+        for logical_id, parameter in template["Parameters"].items()
+        if parameter.get("Default") == "/stoa/alerts/email"
+    ]
+    assert parameter["Type"] == "AWS::SSM::Parameter::Value<String>"
+    assert subscription["Properties"]["Endpoint"] == {"Ref": parameter_id}
+
+    alarms = _alarms(template)
+    assert {name for name, alarm in alarms.items() if not alarm.get("AlarmActions")} == set()
+    for name, alarm in alarms.items():
+        assert alarm["AlarmActions"] == [{"Ref": topic_id}], name
+    assert {
+        "stoa-api-error-rate",
+        "stoa-api-p99-latency",
+        "stoa-weekly-report-errors",
+        "stoa-conversation-generation-errors",
+        "stoa-dispatch-reconciler-errors",
+        "stoa-account-deletion-errors",
+        "stoa-conversation-needs-reconciliation-settled",
+        "stoa-conversation-generation-dlq-messages",
+        "stoa-weekly-report-dlq-messages",
+        "stoa-dispatch-reconciler-dlq-messages",
+        "stoa-account-deletion-dlq-messages",
+        "stoa-teacher-escalation-dlq-messages",
+    } <= set(alarms)
+    for name, alarm in alarms.items():
+        if name.endswith("-dlq-messages"):
+            assert alarm["MetricName"] == "ApproximateNumberOfMessagesVisible", name
+            assert alarm["Threshold"] == 1, name
+            assert alarm["ComparisonOperator"] == "GreaterThanOrEqualToThreshold", name
+        elif name.endswith("-errors"):
+            assert alarm["MetricName"] == "Errors", name
+            assert alarm["Threshold"] == 1, name
+
+
+def test_app_py_wires_each_alarm_to_the_production_resource(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The fixture above repeats app.py's wiring; this reads app.py itself, so
+    a function or DLQ dropped from app.py's MonitoringStack call goes red."""
+    dist_dir = tmp_path / "lambda-dist"
+    dist_dir.mkdir()
+    monkeypatch.setattr(
+        "stacks.api_stack.verify_lambda_dist",
+        lambda: LambdaDistAsset(path=dist_dir, asset_hash="0" * 64),
+    )
+    monkeypatch.delenv("STOA_LIVE_LAMBDA_ENV_FILE", raising=False)
+    monkeypatch.delenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", raising=False)
+    app_globals = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "app.py"), run_name="__main__"
+    )
+    out_dir = Path(app_globals["app"].synth().directory)
+
+    templates = {
+        path.name.removesuffix(".template.json"): json.loads(path.read_text())
+        for path in out_dir.glob("*.template.json")
+    }
+    exports = {
+        output["Export"]["Name"]: (stack, output["Value"])
+        for stack, template in templates.items()
+        for output in template.get("Outputs", {}).values()
+        if "Export" in output
+    }
+
+    def resolve(value: Any, local: str) -> tuple[str, str]:
+        """(resource type, physical name) behind a Ref, GetAtt or import."""
+        stack = local
+        if "Fn::ImportValue" in value:
+            stack, value = exports[value["Fn::ImportValue"]]
+        logical_id = value["Ref"] if "Ref" in value else value["Fn::GetAtt"][0]
+        resource = templates[stack]["Resources"][logical_id]
+        properties = resource["Properties"]
+        return resource["Type"], properties.get("FunctionName") or properties["QueueName"]
+
+    monitoring = templates["StoaMonitoringStack"]
+    targets = {
+        alarm["Properties"]["AlarmName"]: resolve(
+            alarm["Properties"]["Dimensions"][0]["Value"], "StoaMonitoringStack"
+        )
+        for alarm in _named_resources(monitoring, "AWS::CloudWatch::Alarm").values()
+        if alarm["Properties"].get("Dimensions")
+    }
+    lambda_, queue = "AWS::Lambda::Function", "AWS::SQS::Queue"
+    assert targets == {
+        "stoa-api-error-rate": (lambda_, "stoa-api"),
+        "stoa-api-p99-latency": (lambda_, "stoa-api"),
+        "stoa-weekly-report-errors": (lambda_, "stoa-weekly-report"),
+        "stoa-conversation-generation-errors": (lambda_, WORKER),
+        "stoa-dispatch-reconciler-errors": (lambda_, "stoa-dispatch-reconciler"),
+        "stoa-account-deletion-errors": (lambda_, "stoa-account-deletion"),
+        "stoa-conversation-generation-dlq-messages": (
+            queue,
+            "stoa-conversation-generation-dlq",
+        ),
+        "stoa-weekly-report-dlq-messages": (queue, "stoa-weekly-report-dlq"),
+        "stoa-dispatch-reconciler-dlq-messages": (queue, "stoa-dispatch-reconciler-dlq"),
+        "stoa-account-deletion-dlq-messages": (queue, "stoa-account-deletion-dlq"),
+        "stoa-teacher-escalation-dlq-messages": (queue, "stoa-teacher-escalation-dlq.fifo"),
+    }
+    topic_id = next(iter(_named_resources(monitoring, "AWS::SNS::Topic")))
+    for alarm in _named_resources(monitoring, "AWS::CloudWatch::Alarm").values():
+        assert alarm["Properties"]["AlarmActions"] == [{"Ref": topic_id}]
+    assert len(_named_resources(monitoring, "AWS::SNS::Subscription")) == 1
+
+
+def test_a_failing_worker_and_a_lost_sweep_page_someone(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    template = _monitoring_template(monkeypatch, tmp_path)
+    alarms = _alarms(template)
     topic_id = next(iter(_named_resources(template, "AWS::SNS::Topic")))
 
     worker_errors = alarms["stoa-conversation-generation-errors"]

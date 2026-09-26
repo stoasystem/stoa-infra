@@ -1,5 +1,5 @@
 """CloudWatch dashboard, alarms, and Lambda Insights."""
-from typing import Optional
+from typing import Mapping, Optional
 
 from aws_cdk import (
     Stack,
@@ -10,9 +10,18 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_logs as logs,
     aws_sns as sns,
+    aws_sns_subscriptions as subscriptions,
     aws_sqs as sqs,
+    aws_ssm as ssm,
 )
 from constructs import Construct
+
+# Card 111: the address stoa-alerts mails lives outside the code. CloudFormation
+# reads it at deploy time, so the parameter has to exist before the first
+# deploy that carries this: `aws ssm put-parameter --name /stoa/alerts/email
+# --type String --value <address>`. Changing the address is a put-parameter
+# plus a deploy; the new address has to confirm its subscription.
+ALERT_EMAIL_PARAMETER = "/stoa/alerts/email"
 
 
 class MonitoringStack(Stack):
@@ -24,12 +33,20 @@ class MonitoringStack(Stack):
         http_api: apigwv2.HttpApi,
         weekly_report_function: Optional[lambda_.Function] = None,
         conversation_generation_function: Optional[lambda_.Function] = None,
-        conversation_generation_dlq: Optional[sqs.IQueue] = None,
+        dispatch_reconciler_function: Optional[lambda_.Function] = None,
+        account_deletion_function: Optional[lambda_.Function] = None,
+        dead_letter_queues: Mapping[str, sqs.IQueue] = {},
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         alerts_topic = sns.Topic(self, "StoaAlerts", topic_name="stoa-alerts")
+        self._alerts_topic = alerts_topic
+        alerts_topic.add_subscription(
+            subscriptions.EmailSubscription(
+                ssm.StringParameter.value_for_string_parameter(self, ALERT_EMAIL_PARAMETER)
+            )
+        )
 
         # Lambda error rate alarm
         error_alarm = cw.Alarm(
@@ -47,7 +64,7 @@ class MonitoringStack(Stack):
         # Lambda p99 latency alarm — tightened from 10s so a regression on a
         # critical path like login (BUG-008, ~3.9s baseline) actually pages
         # someone instead of hiding under a threshold nothing realistic hits.
-        cw.Alarm(
+        latency_alarm = cw.Alarm(
             self,
             "ApiLatencyAlarm",
             alarm_name="stoa-api-p99-latency",
@@ -59,37 +76,25 @@ class MonitoringStack(Stack):
             evaluation_periods=3,
             comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
         )
+        latency_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
-        if weekly_report_function is not None:
-            report_error_alarm = cw.Alarm(
-                self,
-                "WeeklyReportErrorAlarm",
-                alarm_name="stoa-weekly-report-errors",
-                metric=weekly_report_function.metric_errors(period=Duration.minutes(5)),
-                threshold=1,
-                evaluation_periods=1,
-                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
-            )
-            report_error_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+        # Every job fails where nobody is watching, so any failed invocation
+        # pages. #18's worker: a failure is a student waiting on an answer
+        # that will not come.
+        for job, function in (
+            ("weekly-report", weekly_report_function),
+            ("conversation-generation", conversation_generation_function),
+            ("dispatch-reconciler", dispatch_reconciler_function),
+            ("account-deletion", account_deletion_function),
+        ):
+            if function is not None:
+                self._page_on_errors(job, function)
 
-        # #18: the worker that writes answers outside the request. A failed
-        # invocation is a student waiting on an answer that will not come; a
-        # message in the sweep's DLQ is a sweep the Scheduler gave up on.
+        # A message in a DLQ is work the Scheduler or SQS gave up on.
+        for queue_name, queue in dead_letter_queues.items():
+            self._page_on_dead_letters(queue_name, queue)
+
         if conversation_generation_function is not None:
-            worker_error_alarm = cw.Alarm(
-                self,
-                "ConversationGenerationErrorAlarm",
-                alarm_name="stoa-conversation-generation-errors",
-                metric=conversation_generation_function.metric_errors(
-                    period=Duration.minutes(5)
-                ),
-                threshold=1,
-                evaluation_periods=1,
-                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
-            )
-            worker_error_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
             # E24: the sweep released a reservation nothing else would settle -
             # a model call whose answer was lost, or one kept when no time was
@@ -121,20 +126,6 @@ class MonitoringStack(Stack):
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
             )
             settled_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
-        if conversation_generation_dlq is not None:
-            worker_dlq_alarm = cw.Alarm(
-                self,
-                "ConversationGenerationDlqAlarm",
-                alarm_name="stoa-conversation-generation-dlq-messages",
-                metric=conversation_generation_dlq.metric_approximate_number_of_messages_visible(
-                    period=Duration.minutes(5)
-                ),
-                threshold=1,
-                evaluation_periods=1,
-                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
-            )
-            worker_dlq_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
         # Dashboard
         dashboard = cw.Dashboard(self, "StoaDashboard", dashboard_name="STOA-Overview")
@@ -186,3 +177,35 @@ class MonitoringStack(Stack):
                     width=12,
                 ),
             )
+
+    def _page_on_errors(self, job: str, function: lambda_.IFunction) -> None:
+        alarm = cw.Alarm(
+            self,
+            f"{_pascal(job)}ErrorAlarm",
+            alarm_name=f"stoa-{job}-errors",
+            metric=function.metric_errors(period=Duration.minutes(5)),
+            threshold=1,
+            evaluation_periods=1,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+        )
+        alarm.add_alarm_action(cw_actions.SnsAction(self._alerts_topic))
+
+    def _page_on_dead_letters(self, queue_name: str, queue: sqs.IQueue) -> None:
+        alarm = cw.Alarm(
+            self,
+            f"{_pascal(queue_name)}DlqAlarm",
+            alarm_name=f"stoa-{queue_name}-dlq-messages",
+            metric=queue.metric_approximate_number_of_messages_visible(
+                period=Duration.minutes(5)
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+        )
+        alarm.add_alarm_action(cw_actions.SnsAction(self._alerts_topic))
+
+
+def _pascal(kebab: str) -> str:
+    return "".join(part.capitalize() for part in kebab.split("-"))

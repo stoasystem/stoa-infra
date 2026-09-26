@@ -470,6 +470,7 @@ class ApiStack(Stack):
             queue_name=f"{resource_prefix}-account-deletion-dlq",
             retention_period=Duration.days(14),
         )
+        self.account_deletion_dlq = account_deletion_dlq
         account_deletion_scheduler_role = iam.Role(
             self,
             "AccountDeletionSchedulerRole",
@@ -558,6 +559,7 @@ class ApiStack(Stack):
             queue_name=f"{resource_prefix}-weekly-report-dlq",
             retention_period=Duration.days(14),
         )
+        self.weekly_report_dlq = weekly_report_dlq
         scheduler_role = iam.Role(
             self,
             "WeeklyReportSchedulerRole",
@@ -596,6 +598,7 @@ class ApiStack(Stack):
             queue_name=f"{resource_prefix}-dispatch-reconciler-dlq",
             retention_period=Duration.days(14),
         )
+        self.dispatch_reconciler_dlq = dispatch_reconciler_dlq
         dispatch_scheduler_role = iam.Role(
             self,
             "DispatchReconcilerSchedulerRole",

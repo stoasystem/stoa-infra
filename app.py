@@ -68,7 +68,15 @@ monitoring = MonitoringStack(
     http_api=api.http_api,
     weekly_report_function=api.weekly_report_function,
     conversation_generation_function=api.conversation_generation_function,
-    conversation_generation_dlq=api.conversation_generation_dlq,
+    dispatch_reconciler_function=api.dispatch_reconciler_function,
+    account_deletion_function=api.account_deletion_function,
+    dead_letter_queues={
+        "conversation-generation": api.conversation_generation_dlq,
+        "weekly-report": api.weekly_report_dlq,
+        "dispatch-reconciler": api.dispatch_reconciler_dlq,
+        "account-deletion": api.account_deletion_dlq,
+        "teacher-escalation": notification.teacher_escalation_dlq,
+    },
     env=env,
     tags=prod_tags,
 )

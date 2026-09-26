@@ -30,6 +30,7 @@ class NotificationStack(Stack):
             content_based_deduplication=True,
             retention_period=Duration.days(14),
         )
+        self.teacher_escalation_dlq = dlq
 
         # FIFO queue — ordered teacher escalation events
         self.teacher_queue = sqs.Queue(
