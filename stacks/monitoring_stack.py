@@ -21,6 +21,16 @@ from constructs import Construct
 # deploy that carries this: `aws ssm put-parameter --name /stoa/alerts/email
 # --type String --value <address>`. Changing the address is a put-parameter
 # plus a deploy; the new address has to confirm its subscription.
+#
+# Confirm it with an AWS signature, not by clicking the email's link, so the
+# footer link in every alert cannot unsubscribe it without a login
+# (stoasystem/stoa-backend#47). A new subscription, or `aws sns subscribe`
+# again for the same address, mails a fresh confirmation; take the Token
+# parameter from its Confirm link (valid two days) and run
+# `aws sns confirm-subscription --topic-arn <stoa-alerts ARN> --token <token>
+# --authenticate-on-unsubscribe true`. Check with get-subscription-attributes
+# that ConfirmationWasAuthenticated is "true". CloudFormation has no property
+# for this, so it is lost whenever the subscription is replaced.
 ALERT_EMAIL_PARAMETER = "/stoa/alerts/email"
 
 
