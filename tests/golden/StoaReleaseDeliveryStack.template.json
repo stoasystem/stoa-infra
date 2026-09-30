@@ -1,0 +1,590 @@
+{
+ "Parameters": {
+  "BootstrapVersion": {
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+   "Type": "AWS::SSM::Parameter::Value<String>"
+  }
+ },
+ "Resources": {
+  "ProductionRole5945AB94": {
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {
+        "StringEquals": {
+         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+         "token.actions.githubusercontent.com:sub": "repo:stoasystem/stoa-backend:environment:production"
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Federated": "arn:aws:iam::562923011260:oidc-provider/token.actions.githubusercontent.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "STOA immutable release pipeline role",
+    "RoleName": "stoa-release-production"
+   },
+   "Type": "AWS::IAM::Role"
+  },
+  "ProductionRoleDefaultPolicy80E3AB05": {
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseArtifactBucket4C3BBCC7Arn71E2F76D"
+          },
+          "/candidates/sha256/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseEvidenceBucket9AC00C57Arn502AFE7B"
+          },
+          "/production/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "lambda:GetAlias",
+        "lambda:GetFunction",
+        "lambda:UpdateAlias"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiStagingAlias665E1E658C3D731F"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiProductionAlias46DD088A4F139CAD"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportStagingAlias0C1414F20C760EB6"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportProductionAlias6B02C8F229743996"
+        }
+       ]
+      },
+      {
+       "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+           },
+           "/releases/sha256/*"
+          ]
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+           },
+           "/served-release.json"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "cloudfront:CreateInvalidation",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          "arn:",
+          {
+           "Ref": "AWS::Partition"
+          },
+          ":cloudfront::562923011260:distribution/",
+          {
+           "Fn::ImportValue": "StoaFrontendStack:ExportsOutputRefStoaDistributionECAEA0FD60CA3E8B"
+          }
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ProductionRoleDefaultPolicy80E3AB05",
+    "Roles": [
+     {
+      "Ref": "ProductionRole5945AB94"
+     }
+    ]
+   },
+   "Type": "AWS::IAM::Policy"
+  },
+  "RollbackRole0EF2EAE4": {
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {
+        "StringEquals": {
+         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+         "token.actions.githubusercontent.com:sub": "repo:stoasystem/stoa-backend:environment:production"
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Federated": "arn:aws:iam::562923011260:oidc-provider/token.actions.githubusercontent.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "STOA immutable release pipeline role",
+    "RoleName": "stoa-release-rollback"
+   },
+   "Type": "AWS::IAM::Role"
+  },
+  "RollbackRoleDefaultPolicyFAA2A01F": {
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseArtifactBucket4C3BBCC7Arn71E2F76D"
+          },
+          "/candidates/sha256/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseEvidenceBucket9AC00C57Arn502AFE7B"
+          },
+          "/rollback/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "lambda:GetAlias",
+        "lambda:GetFunction",
+        "lambda:UpdateAlias"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiStagingAlias665E1E658C3D731F"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiProductionAlias46DD088A4F139CAD"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportStagingAlias0C1414F20C760EB6"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportProductionAlias6B02C8F229743996"
+        }
+       ]
+      },
+      {
+       "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+           },
+           "/releases/sha256/*"
+          ]
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+           },
+           "/served-release.json"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "cloudfront:CreateInvalidation",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          "arn:",
+          {
+           "Ref": "AWS::Partition"
+          },
+          ":cloudfront::562923011260:distribution/",
+          {
+           "Fn::ImportValue": "StoaFrontendStack:ExportsOutputRefStoaDistributionECAEA0FD60CA3E8B"
+          }
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "RollbackRoleDefaultPolicyFAA2A01F",
+    "Roles": [
+     {
+      "Ref": "RollbackRole0EF2EAE4"
+     }
+    ]
+   },
+   "Type": "AWS::IAM::Policy"
+  },
+  "StagingRoleDefaultPolicyF7C33A29": {
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseArtifactBucket4C3BBCC7Arn71E2F76D"
+          },
+          "/candidates/sha256/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseEvidenceBucket9AC00C57Arn502AFE7B"
+          },
+          "/staging/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "lambda:GetAlias",
+        "lambda:GetFunction",
+        "lambda:UpdateAlias"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiStagingAlias665E1E658C3D731F"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiProductionAlias46DD088A4F139CAD"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportStagingAlias0C1414F20C760EB6"
+        },
+        {
+         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportProductionAlias6B02C8F229743996"
+        }
+       ]
+      },
+      {
+       "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+           },
+           "/releases/sha256/*"
+          ]
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+           },
+           "/served-release.json"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "cloudfront:CreateInvalidation",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          "arn:",
+          {
+           "Ref": "AWS::Partition"
+          },
+          ":cloudfront::562923011260:distribution/",
+          {
+           "Fn::ImportValue": "StoaFrontendStack:ExportsOutputRefStoaDistributionECAEA0FD60CA3E8B"
+          }
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "StagingRoleDefaultPolicyF7C33A29",
+    "Roles": [
+     {
+      "Ref": "StagingRoleE04E1AF6"
+     }
+    ]
+   },
+   "Type": "AWS::IAM::Policy"
+  },
+  "StagingRoleE04E1AF6": {
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {
+        "StringEquals": {
+         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+         "token.actions.githubusercontent.com:sub": "repo:stoasystem/stoa-backend:environment:staging"
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Federated": "arn:aws:iam::562923011260:oidc-provider/token.actions.githubusercontent.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "STOA immutable release pipeline role",
+    "RoleName": "stoa-release-staging"
+   },
+   "Type": "AWS::IAM::Role"
+  },
+  "UploadRole66CFAE20": {
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {
+        "StringEquals": {
+         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+         "token.actions.githubusercontent.com:sub": "repo:stoasystem/stoa-backend:ref:refs/heads/main"
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Federated": "arn:aws:iam::562923011260:oidc-provider/token.actions.githubusercontent.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "STOA immutable release pipeline role",
+    "RoleName": "stoa-release-upload"
+   },
+   "Type": "AWS::IAM::Role"
+  },
+  "UploadRoleDefaultPolicy918CA478": {
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseArtifactBucket4C3BBCC7Arn71E2F76D"
+          },
+          "/candidates/sha256/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::ImportValue": "StoaStorageStack:ExportsOutputFnGetAttStoaReleaseEvidenceBucket9AC00C57Arn502AFE7B"
+          },
+          "/verification/*"
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "UploadRoleDefaultPolicy918CA478",
+    "Roles": [
+     {
+      "Ref": "UploadRole66CFAE20"
+     }
+    ]
+   },
+   "Type": "AWS::IAM::Policy"
+  },
+  "VerifyRole0A525A7D": {
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {
+        "StringEquals": {
+         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+         "token.actions.githubusercontent.com:sub": "repo:stoasystem/stoa-backend:ref:refs/heads/main"
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Federated": "arn:aws:iam::562923011260:oidc-provider/token.actions.githubusercontent.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "STOA immutable release pipeline role",
+    "RoleName": "stoa-release-verify"
+   },
+   "Type": "AWS::IAM::Role"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}
