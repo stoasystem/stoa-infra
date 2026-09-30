@@ -701,6 +701,96 @@ def test_gateway_records_every_request_without_recording_what_was_said(
             assert forbidden not in body.replace("$context.", "")
 
 
+# --- stoa-infra#3: the gateway's CORS answer ---------------------------------
+
+# The browser origins that load the frontend against this API: production and
+# the redesign preview. stoa-backend lists the same two in
+# `settings.cors_origins` (src/stoa/config.py); the application refuses any
+# other origin's preflight with a 400, and the gateway must not grant what the
+# application refuses nor refuse what it grants. Written out, not imported, for
+# the same reason as PUBLIC_ROUTE_KEYS.
+GATEWAY_CORS_ORIGINS = {"https://app.stoaedu.ch", "https://app-planet.stoaedu.ch"}
+
+# Every request header the frontend sets on a call to this API, lowercased:
+# Content-Type on every call (httpClient.ts, chatStreamApi.ts, analyticsClient.ts,
+# and application/octet-stream in fileApi.ts), Authorization from the request
+# interceptor and the fetch-based callers, Accept-Language from the interceptor
+# and the streaming fetch, Idempotency-Key on billing commands (billingApi.ts).
+# A preflight naming a header outside this list gets no Access-Control-* header
+# back at all, which the browser reads as a refusal.
+FRONTEND_REQUEST_HEADERS = {"authorization", "content-type", "accept-language", "idempotency-key"}
+
+# Every method the frontend calls the API with.
+FRONTEND_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+
+def _cors(template: dict[str, Any]) -> dict[str, Any]:
+    apis = _named_resources(template, "AWS::ApiGatewayV2::Api")
+    assert len(apis) == 1
+    return next(iter(apis.values()))["Properties"]["CorsConfiguration"]
+
+
+def test_the_gateway_names_the_frontend_origins_exactly(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """`*` put `Access-Control-Allow-Origin: *` on every response, any origin's.
+
+    It also cannot be combined with credentials, so it cannot be the answer
+    whichever way the frontend's requests go.
+    """
+    origins = _cors(_api_template(monkeypatch, tmp_path))["AllowOrigins"]
+
+    assert not any("*" in origin for origin in origins)
+    assert len(origins) == len(set(origins))
+    assert set(origins) == GATEWAY_CORS_ORIGINS
+
+
+def test_the_gateway_admits_every_header_the_frontend_sends(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    headers = _cors(_api_template(monkeypatch, tmp_path))["AllowHeaders"]
+
+    assert "*" not in headers
+    assert {header.lower() for header in headers} == FRONTEND_REQUEST_HEADERS
+
+
+def test_the_gateway_admits_the_methods_the_frontend_calls_with(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    methods = _cors(_api_template(monkeypatch, tmp_path))["AllowMethods"]
+
+    assert "*" not in methods
+    assert set(methods) == FRONTEND_METHODS
+
+
+def test_the_gateway_grants_no_credentials_and_caches_the_preflight(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The frontend authenticates with a bearer header, never a cookie.
+
+    No call sets `credentials: 'include'` or `withCredentials`, so granting
+    credentials would widen the answer for nothing. The cache matches
+    Starlette's default of 600 seconds.
+    """
+    cors = _cors(_api_template(monkeypatch, tmp_path))
+
+    assert cors.get("AllowCredentials", False) is False
+    assert cors["MaxAge"] == 600
+    assert "ExposeHeaders" not in cors
+
+
+def test_the_preflight_route_stays_unauthenticated(monkeypatch: Any, tmp_path: Path) -> None:
+    """A browser never sends Authorization on a preflight.
+
+    Behind the authorizer every preflight would be a 401 and every
+    authenticated call would fail before it is made.
+    """
+    grouped = _routes_by_authorization(_api_template(monkeypatch, tmp_path))
+
+    assert "OPTIONS /{proxy+}" in grouped["NONE"]
+    assert "OPTIONS /{proxy+}" not in grouped.get("JWT", set())
+
+
 # --- #18 (E12): the conversation generation worker ---------------------------
 
 
