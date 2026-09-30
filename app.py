@@ -92,12 +92,9 @@ frontend = FrontendStack(app, "StoaFrontendStack", env=env, tags=prod_tags)
 # Basic Auth and noindex reduce accidental use; they do not isolate it: the
 # preview talks to the production API. The second redesign (cute) is on hold.
 
-# Route 53 hosted zone of stoaedu.ch, which already exists outside CDK. The id
-# is in no repository; read it with
-#   aws route53 list-hosted-zones-by-name --dns-name stoaedu.ch --max-items 1
-# and put the part after /hostedzone/ here. tests/test_frontend_preview.py
-# stays red until it is a real zone id, so the deploy cannot run without it.
-STOAEDU_CH_HOSTED_ZONE_ID = "FILL-IN-STOAEDU-CH-HOSTED-ZONE-ID"
+# Existing public Route 53 zone, verified in account 562923011260. Importing
+# by id keeps synth offline and leaves management of the zone outside CDK.
+STOAEDU_CH_HOSTED_ZONE_ID = "Z03950013RYI9LPH4BON7"
 
 preview_tags = {**prod_tags, "Environment": "preview-planet"}
 
