@@ -314,14 +314,51 @@ def test_preview_outputs_the_distribution_id_and_bucket_name(preview: dict[str, 
     assert "Basic " not in rendered
 
 
-def test_the_production_deploy_names_both_preview_stacks() -> None:
+def _stacks_in(step: str) -> list[str]:
+    deploy = step.split("cdk deploy", 1)[1].split("--require-approval", 1)[0]
+    return [
+        token
+        for line in deploy.splitlines()
+        for token in line.replace("\\", " ").split()
+        if not token.startswith("--")
+    ]
+
+
+def _step(workflow: str, name: str) -> str:
+    start = workflow.index(f"      - name: {name}\n")
+    rest = workflow[start + 1 :]
+    end = rest.find("\n      - name: ")
+    return rest if end < 0 else rest[:end]
+
+
+def test_the_preview_stacks_deploy_on_their_own_after_production() -> None:
+    """A failed first preview deploy must not hold up production (audit of #5).
+
+    Named together, cdk orders stacks by dependency only, and the preview
+    stacks depend on no production stack, so they could go first; a failure
+    there would stop every production stack after it. They deploy in a step of
+    their own, after production is deployed and read back.
+    """
     workflow = (ROOT / ".github" / "workflows" / "deploy-production.yml").read_text(
         encoding="utf-8"
     )
-    deploy = workflow.split("cdk deploy \\", 1)[1].split("--require-approval", 1)[0]
-    named = [line.strip().rstrip("\\").strip() for line in deploy.splitlines() if line.strip()]
-    assert PREVIEW in named
-    assert PUBLISHER in named
+    production = _stacks_in(_step(workflow, "Deploy production stacks"))
+    assert PREVIEW not in production
+    assert PUBLISHER not in production
+    assert "StoaFrontendStack" in production
+
+    preview_step = _step(workflow, "Deploy preview stacks")
+    assert _stacks_in(preview_step) == [PREVIEW, PUBLISHER]
+    assert "--exclusively" in preview_step
+    assert "continue-on-error" not in preview_step
+    assert "if:" not in preview_step
+
+    order = [
+        workflow.index("      - name: Deploy production stacks\n"),
+        workflow.index("      - name: Verify live production release\n"),
+        workflow.index("      - name: Deploy preview stacks\n"),
+    ]
+    assert order == sorted(order)
 
 
 # ── Basic Auth behavior, run in Node ──────────────────────────────────────────

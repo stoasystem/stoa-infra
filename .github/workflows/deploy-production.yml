@@ -163,8 +163,6 @@ jobs:
             StoaMonitoringStack \
             StoaFrontendStack \
             StoaReleaseDeliveryStack \
-            StoaFrontendPreviewPlanetStack \
-            StoaFrontendPreviewPublisherStack \
             --require-approval never
 
       # Reads back what the five production aliases serve after the deploy and
@@ -178,6 +176,20 @@ jobs:
             --phase post-deploy \
             --local-dist stoa-backend/dist \
             --output-dir "${RUNNER_TEMP}/release-record/post-deploy"
+
+      # The app-planet preview (#1, #2) deploys on its own, after production is
+      # deployed and read back: a failed first preview deploy (hosted zone,
+      # record or certificate) then stops only the preview, never a
+      # production stack or its release check.
+      - name: Deploy preview stacks
+        working-directory: stoa-infra
+        run: |
+          set -euo pipefail
+          cdk deploy \
+            StoaFrontendPreviewPlanetStack \
+            StoaFrontendPreviewPublisherStack \
+            --exclusively \
+            --require-approval never
 
       - name: Publish change surface to run summary
         if: always()
