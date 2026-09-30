@@ -12,7 +12,8 @@ from stacks.api_stack import ApiStack
 from stacks.ai_stack import AiStack
 from stacks.notification_stack import NotificationStack
 from stacks.monitoring_stack import MonitoringStack
-from stacks.frontend_stack import FrontendStack
+from stacks.frontend_preview_publisher_stack import FrontendPreviewPublisherStack
+from stacks.frontend_stack import FrontendStack, PreviewAccess
 from stacks.release_delivery_stack import ReleaseDeliveryStack
 
 app = cdk.App()
@@ -82,6 +83,46 @@ monitoring = MonitoringStack(
 )
 
 frontend = FrontendStack(app, "StoaFrontendStack", env=env, tags=prod_tags)
+
+# ── Preview of the planet redesign (infra#1, infra#2) ─────────────────────────
+#
+# A second copy of the Web frontend at app-planet.stoaedu.ch for the
+# redesign/planet branch. Same region, same *.stoaedu.ch certificate (imported
+# by ARN inside FrontendStack), its own versioned bucket and distribution.
+# Basic Auth and noindex reduce accidental use; they do not isolate it: the
+# preview talks to the production API. The second redesign (cute) is on hold.
+
+# Route 53 hosted zone of stoaedu.ch, which already exists outside CDK. The id
+# is in no repository; read it with
+#   aws route53 list-hosted-zones-by-name --dns-name stoaedu.ch --max-items 1
+# and put the part after /hostedzone/ here. tests/test_frontend_preview.py
+# stays red until it is a real zone id, so the deploy cannot run without it.
+STOAEDU_CH_HOSTED_ZONE_ID = "FILL-IN-STOAEDU-CH-HOSTED-ZONE-ID"
+
+preview_tags = {**prod_tags, "Environment": "preview-planet"}
+
+planet_preview = FrontendStack(
+    app,
+    "StoaFrontendPreviewPlanetStack",
+    app_domain="app-planet.stoaedu.ch",
+    bucket_name=f"stoa-frontend-preview-planet-{env.account}",
+    preview=PreviewAccess(
+        hosted_zone_id=STOAEDU_CH_HOSTED_ZONE_ID,
+        zone_name="stoaedu.ch",
+    ),
+    env=env,
+    tags=preview_tags,
+)
+
+planet_publisher = FrontendPreviewPublisherStack(
+    app,
+    "StoaFrontendPreviewPublisherStack",
+    environment_name="preview-planet",
+    web_bucket=planet_preview.spa_bucket,
+    distribution=planet_preview.distribution,
+    env=env,
+    tags=preview_tags,
+)
 
 # Card 015: there is one environment, and this used to declare a second.
 #

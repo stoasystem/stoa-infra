@@ -1,0 +1,303 @@
+{
+ "Outputs": {
+  "AppUrl": {
+   "Description": "STOA App URL",
+   "Value": "https://app.stoaedu.ch"
+  },
+  "CloudFrontDomain": {
+   "Description": "CloudFront domain (for Route 53 ALIAS record)",
+   "Value": {
+    "Fn::GetAtt": [
+     "StoaDistributionECAEA0FD",
+     "DomainName"
+    ]
+   }
+  },
+  "ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126": {
+   "Export": {
+    "Name": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
+   },
+   "Value": {
+    "Fn::GetAtt": [
+     "StoaSpaBucket576D99E0",
+     "Arn"
+    ]
+   }
+  },
+  "ExportsOutputRefStoaDistributionECAEA0FD60CA3E8B": {
+   "Export": {
+    "Name": "StoaFrontendStack:ExportsOutputRefStoaDistributionECAEA0FD60CA3E8B"
+   },
+   "Value": {
+    "Ref": "StoaDistributionECAEA0FD"
+   }
+  },
+  "SpaBucketName": {
+   "Description": "S3 bucket for frontend assets",
+   "Value": {
+    "Ref": "StoaSpaBucket576D99E0"
+   }
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+   "Type": "AWS::SSM::Parameter::Value<String>"
+  }
+ },
+ "Resources": {
+  "StoaDistributionECAEA0FD": {
+   "Properties": {
+    "DistributionConfig": {
+     "Aliases": [
+      "app.stoaedu.ch"
+     ],
+     "CacheBehaviors": [
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+       "Compress": true,
+       "PathPattern": "/index.html",
+       "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+       "Compress": true,
+       "PathPattern": "/served-release.json",
+       "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+       "Compress": true,
+       "PathPattern": "/runtime-config.json",
+       "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      }
+     ],
+     "Comment": "STOA SPA \u00e2\u20ac\u201d app.stoaedu.ch",
+     "CustomErrorResponses": [
+      {
+       "ErrorCode": 403,
+       "ResponseCode": 200,
+       "ResponsePagePath": "/index.html"
+      },
+      {
+       "ErrorCode": 404,
+       "ResponseCode": 200,
+       "ResponsePagePath": "/index.html"
+      }
+     ],
+     "DefaultCacheBehavior": {
+      "AllowedMethods": [
+       "GET",
+       "HEAD"
+      ],
+      "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+      "Compress": true,
+      "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
+      "ViewerProtocolPolicy": "redirect-to-https"
+     },
+     "Enabled": true,
+     "HttpVersion": "http2and3",
+     "IPV6Enabled": true,
+     "Origins": [
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StoaSpaBucket576D99E0",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "StoaOAC4E525CCE",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      }
+     ],
+     "PriceClass": "PriceClass_100",
+     "ViewerCertificate": {
+      "AcmCertificateArn": "arn:aws:acm:us-east-1:562923011260:certificate/5a9fc740-7ff9-4faa-b496-81d29eb2b46c",
+      "MinimumProtocolVersion": "TLSv1.2_2021",
+      "SslSupportMethod": "sni-only"
+     }
+    }
+   },
+   "Type": "AWS::CloudFront::Distribution"
+  },
+  "StoaOAC4E525CCE": {
+   "Properties": {
+    "OriginAccessControlConfig": {
+     "Name": "StoaFrontendStackStoaOACDF26EF37",
+     "OriginAccessControlOriginType": "s3",
+     "SigningBehavior": "no-override",
+     "SigningProtocol": "sigv4"
+    }
+   },
+   "Type": "AWS::CloudFront::OriginAccessControl"
+  },
+  "StoaSpaBucket576D99E0": {
+   "DeletionPolicy": "Retain",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "BucketName": "stoa-frontend-562923011260",
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "VersioningConfiguration": {
+     "Status": "Enabled"
+    }
+   },
+   "Type": "AWS::S3::Bucket",
+   "UpdateReplacePolicy": "Retain"
+  },
+  "StoaSpaBucketPolicy4EFDD4A7": {
+   "Properties": {
+    "Bucket": {
+     "Ref": "StoaSpaBucket576D99E0"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "StoaSpaBucket576D99E0",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "StoaSpaBucket576D99E0",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "s3:GetObject",
+       "Condition": {
+        "StringEquals": {
+         "AWS:SourceArn": {
+          "Fn::Join": [
+           "",
+           [
+            "arn:",
+            {
+             "Ref": "AWS::Partition"
+            },
+            ":cloudfront::",
+            {
+             "Ref": "AWS::AccountId"
+            },
+            ":distribution/",
+            {
+             "Ref": "StoaDistributionECAEA0FD"
+            }
+           ]
+          ]
+         }
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "cloudfront.amazonaws.com"
+       },
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "StoaSpaBucket576D99E0",
+            "Arn"
+           ]
+          },
+          "/*"
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Type": "AWS::S3::BucketPolicy"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

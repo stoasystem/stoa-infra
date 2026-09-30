@@ -163,6 +163,8 @@ jobs:
             StoaMonitoringStack \
             StoaFrontendStack \
             StoaReleaseDeliveryStack \
+            StoaFrontendPreviewPlanetStack \
+            StoaFrontendPreviewPublisherStack \
             --require-approval never
 
       # Reads back what the five production aliases serve after the deploy and

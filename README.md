@@ -16,6 +16,8 @@ AWS CDK v2 (Python) infrastructure for the STOA platform.
 | `StoaNotificationStack` | SQS FIFO + SES + EventBridge Scheduler |
 | `StoaMonitoringStack` | CloudWatch Dashboard + Alarms |
 | `StoaFrontendStack` | S3 SPA + CloudFront (OAC) — eu-central-2 |
+| `StoaFrontendPreviewPlanetStack` | `app-planet.stoaedu.ch` 预览：独立 S3 + CloudFront，Basic Auth（CloudFront Function + 空 KVS）、`X-Robots-Tag: noindex`、A/AAAA ALIAS |
+| `StoaFrontendPreviewPublisherStack` | OIDC 角色 `stoa-github-frontend-preview`（仅 `preview-planet` Environment；只能写预览 bucket、失效预览分发） |
 
 ## Setup
 
