@@ -33,6 +33,19 @@ from stacks.lambda_environment import (
 # model or inference profile (open decision Q4) is a one-line change.
 BEDROCK_MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
 
+# The browser origins that load the frontend against this API: production and
+# the redesign preview. Exact origins, never `*`, which answered every origin
+# and cannot be combined with credentials. stoa-backend's
+# `settings.cors_origins` also lists http://localhost:5173; it is left out here
+# because local development talks to a local backend, not to this gateway.
+GATEWAY_CORS_ORIGINS = ("https://app.stoaedu.ch", "https://app-planet.stoaedu.ch")
+
+# Every request header the frontend sets on a call to this API. A preflight
+# that names one header outside this list gets no Access-Control-* header back
+# at all, and the browser refuses the call: Idempotency-Key on billing commands
+# and Accept-Language on every call were both missing.
+GATEWAY_CORS_HEADERS = ("Authorization", "Content-Type", "Accept-Language", "Idempotency-Key")
+
 
 class ApiStack(Stack):
     def __init__(
@@ -667,10 +680,26 @@ class ApiStack(Stack):
             self,
             "StoaHttpApi",
             api_name=f"{resource_prefix}-api",
+            # The gateway writes the CORS headers of every response and drops
+            # the application's own, so this is the answer the browser sees.
+            # The OPTIONS route below still reaches the application, whose
+            # status decides a preflight: Starlette refuses an origin missing
+            # from stoa-backend's `settings.cors_origins` with a 400. Both
+            # lists therefore name the same origins.
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["*"],
-                allow_methods=[apigwv2.CorsHttpMethod.ANY],
-                allow_headers=["Authorization", "Content-Type"],
+                allow_origins=list(GATEWAY_CORS_ORIGINS),
+                allow_methods=[
+                    apigwv2.CorsHttpMethod.GET,
+                    apigwv2.CorsHttpMethod.POST,
+                    apigwv2.CorsHttpMethod.PUT,
+                    apigwv2.CorsHttpMethod.PATCH,
+                    apigwv2.CorsHttpMethod.DELETE,
+                ],
+                allow_headers=list(GATEWAY_CORS_HEADERS),
+                # The frontend sends a bearer header, never a cookie, so
+                # there are no credentials to grant.
+                allow_credentials=False,
+                max_age=Duration.seconds(600),
             ),
         )
         self.http_api = http_api
@@ -768,7 +797,10 @@ class ApiStack(Stack):
                 integration=lambda_integration,
             )
 
-        # OPTIONS /{proxy+} — no auth, allows CORS preflight for all paths
+        # OPTIONS /{proxy+} — no auth, allows CORS preflight for all paths.
+        # Kept (stoa-infra#3): a browser never sends Authorization on a
+        # preflight, and routing it to the application keeps Starlette's origin
+        # check as the second, independent refusal behind the gateway's list.
         http_api.add_routes(
             path="/{proxy+}",
             methods=[apigwv2.HttpMethod.OPTIONS],
