@@ -88,7 +88,7 @@
        "ViewerProtocolPolicy": "redirect-to-https"
       }
      ],
-     "Comment": "STOA SPA \u00e2\u20ac\u201d app.stoaedu.ch",
+     "Comment": "STOA SPA \u2014 app.stoaedu.ch",
      "CustomErrorResponses": [
       {
        "ErrorCode": 403,

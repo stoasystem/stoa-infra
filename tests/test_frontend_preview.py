@@ -71,7 +71,7 @@ def synthesized(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, 
         app_globals = runpy.run_path(str(ROOT / "app.py"), run_name="__main__")
         out_dir = Path(app_globals["app"].synth().directory)
         templates = {
-            path.name.removesuffix(".template.json"): json.loads(path.read_text())
+            path.name.removesuffix(".template.json"): json.loads(path.read_text(encoding="utf-8"))
             for path in out_dir.glob("*.template.json")
         }
         yield {"globals": app_globals, "templates": templates}
@@ -133,7 +133,7 @@ def test_production_frontend_templates_are_byte_for_byte_the_ones_from_main(
     write to them. Regenerate the golden files only for a change that is meant
     to reach production, and say so in the PR.
     """
-    golden = json.loads((GOLDEN / f"{stack_name}.template.json").read_text())
+    golden = json.loads((GOLDEN / f"{stack_name}.template.json").read_text(encoding="utf-8"))
     assert templates[stack_name] == golden
 
 
