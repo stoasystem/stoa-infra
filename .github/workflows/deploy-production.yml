@@ -44,6 +44,15 @@ jobs:
         with:
           python-version: 3.12.13
 
+      # This deploy rebuilds backend main and republishes it. Only rebuild a
+      # commit the backend pipeline has already released, and never while one
+      # of its runs is unfinished. A check, not a lock: see the script.
+      - name: Check the backend release has settled
+        id: backend_release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python stoa-infra/scripts/check_backend_release.py settled --backend-root stoa-backend
+
       - name: Set up uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
@@ -71,6 +80,14 @@ jobs:
         working-directory: stoa-backend
         run: python scripts/build_lambda_dist.py --verify-only
 
+      - name: Check the dist is the settled backend release
+        env:
+          CONFIRMED_SHA: ${{ steps.backend_release.outputs.sha }}
+        run: |
+          python stoa-infra/scripts/check_backend_release.py dist \
+            --dist stoa-backend/dist \
+            --expected-sha "$CONFIRMED_SHA"
+
       - name: Install CDK dependencies
         working-directory: stoa-infra
         run: uv sync --frozen
@@ -96,6 +113,15 @@ jobs:
           role-to-assume: arn:aws:iam::562923011260:role/stoa-github-infra-deploy
           aws-region: eu-central-2
 
+      - name: Check production serves the settled backend release
+        env:
+          CONFIRMED_SHA: ${{ steps.backend_release.outputs.sha }}
+        run: |
+          python stoa-backend/scripts/verify_live_release.py \
+            --expected-sha "$CONFIRMED_SHA" \
+            --phase pre-deploy \
+            --output-dir "${RUNNER_TEMP}/release-record/pre-deploy"
+
       - name: Snapshot live Lambda environment maps
         working-directory: stoa-infra
         run: python scripts/snapshot_lambda_environment.py
@@ -105,6 +131,23 @@ jobs:
         run: |
           set -euo pipefail
           cdk diff 2>&1 | tee "${RUNNER_TEMP}/cdk-diff.txt"
+
+      # The same checks again, bound to the commit confirmed above, as close to
+      # the deploy as a separate step can be. This narrows the window in which
+      # a backend release can start; it does not close it.
+      - name: Recheck the backend release right before deploying
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CONFIRMED_SHA: ${{ steps.backend_release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python stoa-infra/scripts/check_backend_release.py settled \
+            --backend-root stoa-backend \
+            --expected-sha "$CONFIRMED_SHA"
+          python stoa-backend/scripts/verify_live_release.py \
+            --expected-sha "$CONFIRMED_SHA" \
+            --phase pre-deploy \
+            --output-dir "${RUNNER_TEMP}/release-record/recheck"
 
       - name: Deploy production stacks
         working-directory: stoa-infra
@@ -121,6 +164,18 @@ jobs:
             StoaFrontendStack \
             StoaReleaseDeliveryStack \
             --require-approval never
+
+      # Reads back what the five production aliases serve after the deploy and
+      # checks it is this run's build. It only reports; it moves nothing back.
+      - name: Verify live production release
+        env:
+          CONFIRMED_SHA: ${{ steps.backend_release.outputs.sha }}
+        run: |
+          python stoa-backend/scripts/verify_live_release.py \
+            --expected-sha "$CONFIRMED_SHA" \
+            --phase post-deploy \
+            --local-dist stoa-backend/dist \
+            --output-dir "${RUNNER_TEMP}/release-record/post-deploy"
 
       - name: Publish change surface to run summary
         if: always()
@@ -148,3 +203,37 @@ jobs:
           path: ${{ runner.temp }}/cdk-diff.txt
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Publish release records to run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          records="${RUNNER_TEMP}/release-record"
+          if [ ! -d "$records" ]; then
+            echo "No release record was produced." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for phase in pre-deploy recheck post-deploy; do
+            record="${records}/${phase}/release.json"
+            [ -s "$record" ] || continue
+            {
+              echo "## Live release record: ${phase}"
+              echo
+              echo '```json'
+              cat "$record"
+              echo '```'
+              echo
+              echo '```'
+              cat "${record}.sha256"
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload release records
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: release-record-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-record/
+          if-no-files-found: warn
+          retention-days: 90
