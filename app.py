@@ -150,6 +150,8 @@ release_delivery = ReleaseDeliveryStack(
         api.weekly_report_staging_alias,
         api.weekly_report_production_alias,
     ),
+    # stoasystem/stoa-backend#82: the staging role moves these and nothing else.
+    staging_lambda_aliases=(api.api_staging_alias, api.weekly_report_staging_alias),
     env=env,
     tags=prod_tags,
 )

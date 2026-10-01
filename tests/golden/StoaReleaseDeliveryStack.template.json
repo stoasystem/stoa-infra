@@ -359,66 +359,9 @@
          "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiStagingAlias665E1E658C3D731F"
         },
         {
-         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaApiProductionAlias46DD088A4F139CAD"
-        },
-        {
          "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportStagingAlias0C1414F20C760EB6"
-        },
-        {
-         "Fn::ImportValue": "StoaApiStack:ExportsOutputRefStoaWeeklyReportProductionAlias6B02C8F229743996"
         }
        ]
-      },
-      {
-       "Action": [
-        "s3:GetObject",
-        "s3:GetObjectVersion",
-        "s3:PutObject"
-       ],
-       "Effect": "Allow",
-       "Resource": [
-        {
-         "Fn::Join": [
-          "",
-          [
-           {
-            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
-           },
-           "/releases/sha256/*"
-          ]
-         ]
-        },
-        {
-         "Fn::Join": [
-          "",
-          [
-           {
-            "Fn::ImportValue": "StoaFrontendStack:ExportsOutputFnGetAttStoaSpaBucket576D99E0ArnA49EB126"
-           },
-           "/served-release.json"
-          ]
-         ]
-        }
-       ]
-      },
-      {
-       "Action": "cloudfront:CreateInvalidation",
-       "Effect": "Allow",
-       "Resource": {
-        "Fn::Join": [
-         "",
-         [
-          "arn:",
-          {
-           "Ref": "AWS::Partition"
-          },
-          ":cloudfront::562923011260:distribution/",
-          {
-           "Fn::ImportValue": "StoaFrontendStack:ExportsOutputRefStoaDistributionECAEA0FD60CA3E8B"
-          }
-         ]
-        ]
-       }
       }
      ],
      "Version": "2012-10-17"

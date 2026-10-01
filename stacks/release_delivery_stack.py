@@ -36,6 +36,7 @@ class ReleaseDeliveryStack(Stack):
         web_bucket: s3.IBucket,
         distribution: cloudfront.IDistribution,
         lambda_aliases: Sequence[lambda_.IAlias] = (),
+        staging_lambda_aliases: Sequence[lambda_.IAlias] = (),
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -92,12 +93,11 @@ class ReleaseDeliveryStack(Stack):
             evidence_bucket,
             "staging/*",
         )
-        self._grant_alias_transition(self.staging_role, lambda_aliases)
-        self._grant_web_release_transition(
-            self.staging_role,
-            web_bucket,
-            distribution,
-        )
+        # stoasystem/stoa-backend#82: staging moves staging aliases only, and
+        # touches no web pointer - there is no staging site, so the only one it
+        # could reach was production's. The role's trust names an environment
+        # GitHub creates unprotected on first use.
+        self._grant_alias_transition(self.staging_role, staging_lambda_aliases)
 
         self.production_role = self._github_role(
             "ProductionRole",

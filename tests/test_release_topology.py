@@ -176,8 +176,8 @@ def test_release_role_permissions_are_separated_and_resource_scoped() -> None:
     _, delivery = _templates()
     expected_actions = {
         "stoa-release-upload": {"s3:PutObject", "s3:PutObjectTagging"},
+        # No web pointer and no CloudFront: there is no staging site (#82).
         "stoa-release-staging": {
-            "cloudfront:CreateInvalidation",
             "s3:GetObject",
             "s3:GetObjectVersion",
             "s3:PutObject",
@@ -400,11 +400,18 @@ def test_release_roles_can_only_move_aliases_and_stale_dist_bypass_is_absent(
             api.weekly_report_staging_alias,
             api.weekly_report_production_alias,
         ),
+        staging_lambda_aliases=(api.api_staging_alias, api.weekly_report_staging_alias),
         env=cdk.Environment(account=ACCOUNT, region=REGION),
     )
     delivery_template = Template.from_stack(delivery).to_json()
+    # stoasystem/stoa-backend#82: staging reaches staging aliases only.
+    staging = _statements(_policy_for_role(delivery_template, "stoa-release-staging"))
+    [staging_aliases] = [s for s in staging if "lambda:UpdateAlias" in s["Action"]]
+    rendered_staging = json.dumps(staging_aliases["Resource"])
+    assert "StoaApiStagingAlias" in rendered_staging
+    assert "StoaWeeklyReportStagingAlias" in rendered_staging
+    assert "ProductionAlias" not in json.dumps(staging)
     for role_name in (
-        "stoa-release-staging",
         "stoa-release-production",
         "stoa-release-rollback",
     ):
@@ -478,7 +485,6 @@ def test_release_roles_can_write_only_immutable_web_prefixes_and_the_served_poin
     )
     template = Template.from_stack(delivery).to_json()
     for role_name in (
-        "stoa-release-staging",
         "stoa-release-production",
         "stoa-release-rollback",
     ):
@@ -487,6 +493,12 @@ def test_release_roles_can_write_only_immutable_web_prefixes_and_the_served_poin
         assert "served-release.json" in rendered
         assert "cloudfront:CreateInvalidation" in rendered
         assert "s3:DeleteObject" not in rendered
+    # stoasystem/stoa-backend#82: there is no staging site, so the staging role
+    # reaches no web pointer, no release prefix and no distribution - the only
+    # ones it could have reached were production's.
+    staging = json.dumps(_statements(_policy_for_role(template, "stoa-release-staging")))
+    for production_only in ("releases/sha256/*", "served-release.json", "cloudfront:"):
+        assert production_only not in staging, production_only
 
 
 def test_app_passes_owned_web_resources_to_release_delivery_without_name_lookup() -> None:
