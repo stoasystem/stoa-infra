@@ -137,6 +137,44 @@ class MonitoringStack(Stack):
             )
             settled_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
+        if dispatch_reconciler_function is not None:
+            # stoasystem/stoa-backend#88: a student who asked for a teacher
+            # nobody can be offered to, waiting past the alert limit. The sweep
+            # logs one line per such request each run. The sweep's 5-minute rate
+            # is not aligned to the alarm's 5-minute periods, so one period can
+            # fall between two runs and hold no line: raised on any line in the
+            # last two periods, the alarm stays up across that gap instead of
+            # clearing and paging again. SNS writes when its state changes.
+            # The event name is the backend's TEACHER_HELP_WAITING_EVENT; a test
+            # reads it from the backend checkout.
+            waiting = logs.MetricFilter(
+                self,
+                "TeacherHelpWaitingNoCandidateFilter",
+                log_group=logs.LogGroup.from_log_group_name(
+                    self,
+                    "DispatchReconcilerLogs",
+                    f"/aws/lambda/{dispatch_reconciler_function.function_name}",
+                ),
+                metric_namespace="Stoa/TeacherHelp",
+                metric_name="WaitingWithNoTeacher",
+                filter_pattern=logs.FilterPattern.literal(
+                    '"event_category=teacher_help_waiting_no_candidate"'
+                ),
+                metric_value="1",
+            )
+            waiting_alarm = cw.Alarm(
+                self,
+                "TeacherHelpWaitingNoCandidateAlarm",
+                alarm_name="stoa-teacher-help-waiting-no-teacher",
+                metric=waiting.metric(statistic="Sum", period=Duration.minutes(5)),
+                threshold=1,
+                evaluation_periods=2,
+                datapoints_to_alarm=1,
+                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            )
+            waiting_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
         # Dashboard
         dashboard = cw.Dashboard(self, "StoaDashboard", dashboard_name="STOA-Overview")
         dashboard.add_widgets(

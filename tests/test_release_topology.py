@@ -1105,10 +1105,78 @@ def test_a_failing_worker_and_a_lost_sweep_page_someone(
     assert settled["Statistic"] == "Sum"
     for alarm in (worker_errors, dlq, settled):
         assert alarm["AlarmActions"] == [{"Ref": topic_id}]
-    [metric_filter] = _named_resources(template, "AWS::Logs::MetricFilter").values()
+    [metric_filter] = [
+        resource
+        for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
+        if "conversation_ai_needs_reconciliation_settled"
+        in resource["Properties"]["FilterPattern"]
+    ]
     assert metric_filter["Properties"]["FilterPattern"] == (
         '"event_category=conversation_ai_needs_reconciliation_settled"'
     )
     [transformation] = metric_filter["Properties"]["MetricTransformations"]
     assert transformation["MetricName"] == "NeedsReconciliationSettled"
     assert transformation["MetricNamespace"] == "Stoa/Conversations"
+
+
+def test_a_student_nobody_can_be_offered_to_pages_someone(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend#88: a long wait with no teacher reaches stoa-alerts."""
+    template = _monitoring_template(monkeypatch, tmp_path)
+    topic_id = next(iter(_named_resources(template, "AWS::SNS::Topic")))
+    waiting = _alarms(template)["stoa-teacher-help-waiting-no-teacher"]
+    assert waiting["MetricName"] == "WaitingWithNoTeacher"
+    assert waiting["Namespace"] == "Stoa/TeacherHelp"
+    assert waiting["Statistic"] == "Sum"
+    assert waiting["Period"] == 300
+    assert waiting["Threshold"] == 1
+    assert waiting["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+    # Any line in the last two periods keeps it raised: the sweep is not
+    # aligned to the periods, and one can fall between two runs.
+    assert waiting["EvaluationPeriods"] == 2
+    assert waiting["DatapointsToAlarm"] == 1
+    assert waiting["TreatMissingData"] == "notBreaching"
+    assert waiting["AlarmActions"] == [{"Ref": topic_id}]
+    [metric_filter] = [
+        resource
+        for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
+        if "teacher_help_waiting_no_candidate" in resource["Properties"]["FilterPattern"]
+    ]
+    # The reconciler's own log group: its name comes across from the API stack.
+    joined = metric_filter["Properties"]["LogGroupName"]["Fn::Join"]
+    assert joined[0] == "" and joined[1][0] == "/aws/lambda/"
+    assert "StoaDispatchReconcilerFunction" in joined[1][1]["Fn::ImportValue"]
+    [transformation] = metric_filter["Properties"]["MetricTransformations"]
+    assert transformation["MetricName"] == "WaitingWithNoTeacher"
+    assert transformation["MetricNamespace"] == "Stoa/TeacherHelp"
+    assert transformation["MetricValue"] == "1"
+
+
+def test_the_waiting_filter_matches_the_event_the_backend_logs(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """One string, two repositories: the filter is held to the backend's own name.
+
+    The backend ships first (#33's release rule), so it is this side, deployed
+    second, that checks the pair: a renamed event would otherwise leave the
+    alarm silently watching for a line nobody writes.
+    """
+    import re
+
+    from stacks.lambda_dist_guard import DEFAULT_BACKEND_ROOT
+
+    source = (
+        DEFAULT_BACKEND_ROOT / "src" / "stoa" / "services" / "teacher_dispatch_service.py"
+    ).read_text(encoding="utf-8")
+    [event] = re.findall(r'^TEACHER_HELP_WAITING_EVENT = "([a-z_]+)"$', source, re.MULTILINE)
+    telemetry = (
+        DEFAULT_BACKEND_ROOT / "src" / "stoa" / "security" / "private_telemetry.py"
+    ).read_text(encoding="utf-8")
+    assert f'"{event}"' in telemetry  # a closed category the backend can emit
+    template = _monitoring_template(monkeypatch, tmp_path)
+    patterns = {
+        resource["Properties"]["FilterPattern"]
+        for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
+    }
+    assert f'"event_category={event}"' in patterns
