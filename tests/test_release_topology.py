@@ -1192,3 +1192,40 @@ def test_the_waiting_filter_matches_the_event_the_backend_logs(
         for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
     }
     assert f'"event_category={event}"' in patterns
+
+
+def _ses_statements_for(template: dict[str, Any], function_name_suffix: str) -> list[dict[str, Any]]:
+    functions = [
+        resource
+        for resource in _named_resources(template, "AWS::Lambda::Function").values()
+        if str(resource["Properties"].get("FunctionName", "")).endswith(function_name_suffix)
+    ]
+    assert len(functions) == 1
+    role_logical_id = functions[0]["Properties"]["Role"]["Fn::GetAtt"][0]
+    statements = []
+    for policy in _named_resources(template, "AWS::IAM::Policy").values():
+        if {"Ref": role_logical_id} not in policy["Properties"]["Roles"]:
+            continue
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            actions = statement["Action"]
+            actions = actions if isinstance(actions, list) else [actions]
+            if any(action.startswith("ses:") for action in actions):
+                statements.append(statement)
+    return statements
+
+
+def test_dispatch_reconciler_can_send_reminder_email_only_as_stoaedu(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    # Re-dispatch sends the teacher's reminder email from the reconciler
+    # (stoa-backend#141); without this the send fails with AccessDenied.
+    template = _api_template(monkeypatch, tmp_path)
+    statements = _ses_statements_for(template, "-dispatch-reconciler")
+
+    assert statements == [
+        {
+            "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+            "Effect": "Allow",
+            "Resource": f"arn:aws:ses:{REGION}:{ACCOUNT}:identity/stoaedu.ch",
+        }
+    ]

@@ -476,6 +476,14 @@ class ApiStack(Stack):
                 f"arn:aws:ses:{self.region}:{self.account}:identity/stoaedu.ch",
             ],
         ))
+        # Re-dispatch sends the assigned teacher's reminder email from the
+        # reconciler (stoa-backend#141); the first dispatch sends it from the API.
+        self.dispatch_reconciler_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail", "ses:SendRawEmail"],
+            resources=[
+                f"arn:aws:ses:{self.region}:{self.account}:identity/stoaedu.ch",
+            ],
+        ))
 
         account_deletion_dlq = sqs.Queue(
             self,
