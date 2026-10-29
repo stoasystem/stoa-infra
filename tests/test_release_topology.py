@@ -657,6 +657,11 @@ PUBLIC_ROUTE_KEYS = {
     "POST /billing/webhooks/stripe",
     "POST /teacher-applications",
     "POST /teacher-applications/activation/claim",
+    # The phone that scanned a one-time upload code is not signed in
+    # (stoa-backend#146); the code in the body is the credential.
+    "POST /upload-codes/complete",
+    "POST /upload-codes/parts/{part_number}",
+    "POST /upload-codes/redeem",
 }
 
 
@@ -701,6 +706,30 @@ def test_claiming_an_invitation_is_reachable_without_a_token_and_only_by_post(
 
     assert "POST /auth/invitations/claim" in grouped["NONE"]
     assert "GET /auth/invitations/claim" not in grouped["NONE"]
+
+
+def test_the_phone_upload_routes_are_reachable_without_a_token_and_only_by_post(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The one-time code and the upload token travel in the JSON body.
+
+    A GET would put them in the query string, which reaches access logs and
+    browser history, so these three paths answer POST and nothing else.
+    """
+    grouped = _routes_by_authorization(_api_template(monkeypatch, tmp_path))
+    phone = {
+        key
+        for keys in grouped.values()
+        for key in keys
+        if " /upload-codes/" in key
+    }
+
+    assert phone == {
+        "POST /upload-codes/complete",
+        "POST /upload-codes/parts/{part_number}",
+        "POST /upload-codes/redeem",
+    }
+    assert phone <= grouped["NONE"]
 
 
 def test_the_user_pool_groups_are_not_declared_here(monkeypatch: Any, tmp_path: Path) -> None:

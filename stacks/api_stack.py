@@ -813,6 +813,13 @@ class ApiStack(Stack):
             # verifies the untouched body through Stripe's SDK and refuses outright
             # when the signing secret is unset, so the signature is the authenticator.
             ("/billing/webhooks/stripe", [apigwv2.HttpMethod.POST]),
+            # The phone that scanned a one-time upload code is not signed in
+            # (stoa-backend#146). The code, then the upload token it is exchanged
+            # for, travel in the JSON body and are the credential; the handler
+            # checks them against a hash and caps refusals per source address.
+            ("/upload-codes/redeem", [apigwv2.HttpMethod.POST]),
+            ("/upload-codes/parts/{part_number}", [apigwv2.HttpMethod.POST]),
+            ("/upload-codes/complete", [apigwv2.HttpMethod.POST]),
         ]:
             http_api.add_routes(
                 path=path,
