@@ -562,6 +562,51 @@ def test_functions_that_invoke_a_model_may_also_count_its_tokens(
         assert "bedrock:InvokeModelWithResponseStream" in actions
 
 
+def _statements_by_handler(template: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Every policy statement on each function's role, keyed by the handler."""
+    policies = _named_resources(template, "AWS::IAM::Policy").values()
+    found: dict[str, list[dict[str, Any]]] = {}
+    for function in _named_resources(template, "AWS::Lambda::Function").values():
+        role = function["Properties"]["Role"]["Fn::GetAtt"][0]
+        found[function["Properties"]["Handler"]] = [
+            statement
+            for policy in policies
+            if {"Ref": role} in policy["Properties"].get("Roles", [])
+            for statement in _statements(policy)
+        ]
+    return found
+
+
+def _grants(statement: dict[str, Any], action: str) -> bool:
+    actions = statement.get("Action")
+    return action in (actions if isinstance(actions, list) else [actions])
+
+
+def test_the_api_may_moderate_images_in_frankfurt_and_nowhere_else(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Upload completion asks Rekognition about every image (stoa-backend#138).
+
+    Without this grant every image upload fails as retryable, so it deploys before
+    or with the backend. Rekognition is not offered in Zurich; ADR-010 sends the
+    image to Frankfurt and nowhere else.
+    """
+    by_handler = _statements_by_handler(_api_template(monkeypatch, tmp_path))
+
+    moderating = {
+        handler: [s for s in statements if _grants(s, "rekognition:DetectModerationLabels")]
+        for handler, statements in by_handler.items()
+    }
+    assert {handler for handler, found in moderating.items() if found} == {"stoa.main.handler"}
+    [statement] = moderating["stoa.main.handler"]
+    assert statement["Effect"] == "Allow"
+    assert statement["Action"] == "rekognition:DetectModerationLabels"
+    assert statement["Resource"] == "*"
+    assert statement["Condition"] == {
+        "StringEquals": {"aws:RequestedRegion": "eu-central-1"}
+    }
+
+
 def test_a_waiting_student_is_swept_back_to_a_teacher(monkeypatch: Any, tmp_path: Path) -> None:
     """Dispatch failures and unaccepted offers used to leave a student on nobody."""
     template = _api_template(monkeypatch, tmp_path)
