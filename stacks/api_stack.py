@@ -237,6 +237,11 @@ class ApiStack(Stack):
                     "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                     "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
                     "S3_REPORTS_BUCKET": reports_bucket.bucket_name,
+                    # Account deletion purges a person's images, and the daily
+                    # moderation image retention below deletes refused ones
+                    # (stoasystem/stoa-backend#139). Without this the code's
+                    # default bucket name is not the deployed bucket's.
+                    "S3_IMAGES_BUCKET": images_bucket.bucket_name,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                     **carried_audit_keys,
                 },
@@ -520,6 +525,36 @@ class ApiStack(Stack):
                 arn=self.account_deletion_production_alias.function_arn,
                 role_arn=account_deletion_scheduler_role.role_arn,
                 input='{"source":"stoa.scheduler","job":"account_deletion","limit":25}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=3_600,
+                    maximum_retry_attempts=3,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=account_deletion_dlq.queue_arn,
+                ),
+            ),
+        )
+
+        # stoasystem/stoa-backend#139: an image moderation refused is kept for the
+        # admin review queue and deleted 90 days after its case is handled. The
+        # account-deletion function runs it: it already holds the table and the
+        # images bucket, and its handler takes this job by name.
+        scheduler.CfnSchedule(
+            self,
+            "ModerationImageRetentionSchedule",
+            name=f"{resource_prefix}-moderation-image-retention",
+            group_name=f"{resource_prefix}-schedules",
+            description="Delete refused images 90 days after their moderation case is handled.",
+            # Days are the unit of the retention; a daily pass is late by at
+            # most one day.
+            schedule_expression="rate(1 day)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.account_deletion_production_alias.function_arn,
+                role_arn=account_deletion_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"moderation_image_retention","limit":100}',
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
                     maximum_event_age_in_seconds=3_600,
                     maximum_retry_attempts=3,

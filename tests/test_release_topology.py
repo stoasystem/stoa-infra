@@ -1274,3 +1274,29 @@ def test_dispatch_reconciler_can_send_reminder_email_only_as_stoaedu(
             "Resource": f"arn:aws:ses:{REGION}:{ACCOUNT}:identity/stoaedu.ch",
         }
     ]
+
+
+def test_refused_images_are_deleted_by_a_daily_job_on_the_deletion_function(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend#139: 90 days after a moderation case is handled."""
+    template = _api_template(monkeypatch, tmp_path)
+    alias_id, _ = _alias_by_function_and_name(template, "stoa-account-deletion", "production")
+
+    schedules = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::Scheduler::Schedule").values()
+        if resource["Properties"].get("Name") == "stoa-moderation-image-retention"
+    ]
+    assert len(schedules) == 1, "refused images would be kept for ever"
+    schedule = schedules[0]
+    assert schedule["ScheduleExpression"] == "rate(1 day)"
+    assert alias_id in json.dumps(schedule["Target"]["Arn"])
+    assert json.loads(schedule["Target"]["Input"])["job"] == "moderation_image_retention"
+    assert schedule["Target"]["DeadLetterConfig"]["Arn"], "a failed run would vanish"
+
+    _, function = _resource_by_property(
+        template, "AWS::Lambda::Function", "FunctionName", "stoa-account-deletion"
+    )
+    images_bucket = function["Properties"]["Environment"]["Variables"]["S3_IMAGES_BUCKET"]
+    assert "StoaImagesBucket" in json.dumps(images_bucket)
