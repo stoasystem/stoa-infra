@@ -33,6 +33,10 @@ from stacks.lambda_environment import (
 # model or inference profile (open decision Q4) is a one-line change.
 BEDROCK_MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
 
+# Where uploaded images are moderated: Frankfurt, because Rekognition is not
+# offered in Zurich (ADR-010). Must match stoa-backend's image_moderation_region.
+IMAGE_MODERATION_REGION = "eu-central-1"
+
 # The browser origins that load the frontend against this API: production and
 # the redesign preview. Exact origins, never `*`, which answered every origin
 # and cannot be combined with credentials. stoa-backend's
@@ -657,6 +661,17 @@ class ApiStack(Stack):
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["rekognition:DetectText"],
             resources=["*"],
+        ))
+        # Image moderation (stoa-backend#138). The API shows each uploaded image --
+        # the image alone -- to DetectModerationLabels in Frankfurt (ADR-010). The
+        # base model has no resource ARN to name, so the grant is pinned to that
+        # one region instead.
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["rekognition:DetectModerationLabels"],
+            resources=["*"],
+            conditions={
+                "StringEquals": {"aws:RequestedRegion": IMAGE_MODERATION_REGION},
+            },
         ))
 
         # Cognito admin operations (register, login, /auth/me)
