@@ -732,6 +732,36 @@ def test_the_phone_upload_routes_are_reachable_without_a_token_and_only_by_post(
     assert phone <= grouped["NONE"]
 
 
+def test_the_phone_upload_routes_are_throttled_and_nothing_else_is(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Nothing at the gateway stands between a script and these tokenless routes.
+
+    The cap is per route and shared by every caller, so it bounds what a flood
+    costs; per-address limits are the application's. The stage waits for the
+    routes it names, since a stage deployed before its route fails.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    [(stage_id, stage)] = _named_resources(template, "AWS::ApiGatewayV2::Stage").items()
+    routes = {
+        resource["Properties"]["RouteKey"]: logical_id
+        for logical_id, resource in _named_resources(
+            template, "AWS::ApiGatewayV2::Route"
+        ).items()
+    }
+    phone = (
+        "POST /upload-codes/complete",
+        "POST /upload-codes/parts/{part_number}",
+        "POST /upload-codes/redeem",
+    )
+
+    assert stage["Properties"]["RouteSettings"] == {
+        key: {"ThrottlingRateLimit": 5, "ThrottlingBurstLimit": 10} for key in phone
+    }
+    assert "DefaultRouteSettings" not in stage["Properties"]
+    assert {routes[key] for key in phone} <= set(stage.get("DependsOn", []))
+
+
 def test_the_user_pool_groups_are_not_declared_here(monkeypatch: Any, tmp_path: Path) -> None:
     """Declaring them would take every signed-in user down with the deploy.
 
