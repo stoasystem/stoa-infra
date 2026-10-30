@@ -50,6 +50,14 @@ GATEWAY_CORS_ORIGINS = ("https://app.stoaedu.ch", "https://app-planet.stoaedu.ch
 # and Accept-Language on every call were both missing.
 GATEWAY_CORS_HEADERS = ("Authorization", "Content-Type", "Accept-Language", "Idempotency-Key")
 
+# The phone upload-code routes take no token (stoa-backend#146), so nothing at the
+# gateway stands between a script and the Lambda behind them. These caps are per
+# route and shared by every caller, not per address: they bound what a flood costs.
+# Per-address limits are the application's (refusals counted per source). A phone
+# makes one redeem, one part per 5 MiB and one complete, so single digits per
+# second is room for many classrooms at once.
+UPLOAD_CODE_ROUTE_THROTTLE = {"ThrottlingRateLimit": 5, "ThrottlingBurstLimit": 10}
+
 
 class ApiStack(Stack):
     def __init__(
@@ -825,6 +833,7 @@ class ApiStack(Stack):
         # gateway surface that existed only because the loop was convenient.
         # stoa-backend pins this same set from its side in
         # tests/test_route_authorization_inventory.py; the two must agree.
+        upload_code_routes: list[apigwv2.HttpRoute] = []
         for path, methods in [
             ("/health", [apigwv2.HttpMethod.GET]),
             ("/auth/register", [apigwv2.HttpMethod.POST]),
@@ -848,12 +857,32 @@ class ApiStack(Stack):
             # verifies the untouched body through Stripe's SDK and refuses outright
             # when the signing secret is unset, so the signature is the authenticator.
             ("/billing/webhooks/stripe", [apigwv2.HttpMethod.POST]),
+            # The phone that scanned a one-time upload code is not signed in
+            # (stoa-backend#146). The code, then the upload token it is exchanged
+            # for, travel in the JSON body and are the credential; the handler
+            # checks them against a hash and caps refusals per source address.
+            ("/upload-codes/redeem", [apigwv2.HttpMethod.POST]),
+            ("/upload-codes/parts/{part_number}", [apigwv2.HttpMethod.POST]),
+            ("/upload-codes/complete", [apigwv2.HttpMethod.POST]),
         ]:
-            http_api.add_routes(
+            added = http_api.add_routes(
                 path=path,
                 methods=methods,
                 integration=lambda_integration,
             )
+            if path.startswith("/upload-codes/"):
+                upload_code_routes.extend(added)
+
+        # Route settings name routes by key, and a stage deployed before the route
+        # it names fails, so the stage waits for them.
+        if default_stage is not None:
+            cfn_stage = default_stage.node.default_child
+            cfn_stage.route_settings = {
+                route.node.default_child.route_key: dict(UPLOAD_CODE_ROUTE_THROTTLE)
+                for route in upload_code_routes
+            }
+            for route in upload_code_routes:
+                cfn_stage.node.add_dependency(route)
 
         # OPTIONS /{proxy+} — no auth, allows CORS preflight for all paths.
         # Kept (stoa-infra#3): a browser never sends Authorization on a
@@ -881,7 +910,9 @@ class ApiStack(Stack):
 
         # WAF note: HTTP API v2 does not support direct WAF WebACL association.
         # WAF protection is applied at the CloudFront layer in FrontendStack (Phase 2).
-        # Rate limiting is enforced by API Gateway throttling settings per stage.
+        # The stage sets no throttle of its own, so every route runs under the
+        # account's regional API Gateway limit, except the three upload-code routes,
+        # which carry route throttles above. Per-caller limits are the application's.
 
         self.api_url = http_api.url
         CfnOutput(self, "ApiUrl", value=http_api.url or "", description="STOA API base URL")
