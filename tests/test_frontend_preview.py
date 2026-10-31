@@ -29,6 +29,7 @@ from stacks.frontend_stack import (
     APP_DOMAIN,
     BASIC_AUTH_KVS_KEY,
     BASIC_AUTH_FUNCTION_SOURCE,
+    CONTENT_SECURITY_POLICY,
     FrontendStack,
     WILDCARD_CERT_ARN_US,
 )
@@ -126,7 +127,9 @@ def _behaviors(template: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def test_production_frontend_templates_are_byte_for_byte_the_ones_from_main(
     templates: dict[str, dict[str, Any]], stack_name: str
 ) -> None:
-    """The golden files are app.py's synthesis at 112e2df, before infra#1.
+    """The golden files are app.py's synthesis at 112e2df, before infra#1;
+    StoaFrontendStack's was regenerated for the content security policy
+    (stoa-frontend#533), its only change since.
 
     A difference here is a change to production: to the bucket, to the
     distribution that serves app.stoaedu.ch, or to the release roles that
@@ -152,15 +155,62 @@ def test_frontend_stack_defaults_are_production() -> None:
     for resource_type in (
         "AWS::CloudFront::Function",
         "AWS::CloudFront::KeyValueStore",
-        "AWS::CloudFront::ResponseHeadersPolicy",
         "AWS::Route53::RecordSet",
         "AWS::CertificateManager::Certificate",
     ):
         assert _resources(template, resource_type) == {}, resource_type
-    for behavior in _behaviors(template).values():
-        assert "FunctionAssociations" not in behavior
-        assert "ResponseHeadersPolicyId" not in behavior
+    policy_id, _ = _only(template, "AWS::CloudFront::ResponseHeadersPolicy")
+    for name, behavior in _behaviors(template).items():
+        assert "FunctionAssociations" not in behavior, name
+        assert behavior.get("ResponseHeadersPolicyId") == {"Ref": policy_id}, name
     assert stack.spa_bucket is not None and stack.distribution is not None
+
+
+# ── Production's content security policy (stoa-frontend#533) ─────────────────
+
+# stoa-frontend's `contentSecurityPolicy(PRODUCTION_SOURCES)`, as its
+# tests/component/contentSecurityPolicy533.test.ts pins it. A change to the
+# policy is made there first, where the dist e2e serves the app under it.
+FRONTEND_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; "
+    "connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch "
+    "https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com; "
+    "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; "
+    "form-action 'self'; frame-ancestors 'none'"
+)
+
+
+def test_production_sends_the_frontend_policy_report_only(
+    templates: dict[str, dict[str, Any]],
+) -> None:
+    """One header on every response, report-only: it blocks nothing yet."""
+    template = templates[PRODUCTION_FRONTEND]
+    policy_id, policy = _only(template, "AWS::CloudFront::ResponseHeadersPolicy")
+    config = policy["Properties"]["ResponseHeadersPolicyConfig"]
+    assert config["CustomHeadersConfig"]["Items"] == [
+        {
+            "Header": "Content-Security-Policy-Report-Only",
+            "Override": True,
+            "Value": FRONTEND_POLICY,
+        }
+    ]
+    assert CONTENT_SECURITY_POLICY == FRONTEND_POLICY
+    # Not enforced, and nothing else rides along with it.
+    assert set(config) == {"Comment", "CustomHeadersConfig", "Name"}
+    # The SPA fallback serves /index.html for / and every deep link, so the
+    # header must be on that behavior as on the others.
+    behaviors = _behaviors(template)
+    assert set(behaviors) == {"default"} | PROTECTED_PATHS
+    for name, behavior in behaviors.items():
+        assert behavior.get("ResponseHeadersPolicyId") == {"Ref": policy_id}, name
+
+
+def test_preview_does_not_send_the_policy(preview: dict[str, Any]) -> None:
+    """The preview keeps its noindex policy alone, as before."""
+    _, policy = _only(preview, "AWS::CloudFront::ResponseHeadersPolicy")
+    headers = policy["Properties"]["ResponseHeadersPolicyConfig"]["CustomHeadersConfig"]["Items"]
+    assert [header["Header"] for header in headers] == ["X-Robots-Tag"]
 
 
 def test_app_declares_production_frontend_without_overrides() -> None:
