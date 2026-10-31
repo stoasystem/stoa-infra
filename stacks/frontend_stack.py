@@ -2,7 +2,8 @@
 
 The defaults are production (app.stoaedu.ch). A preview passes its own domain
 and bucket name plus a `PreviewAccess`, which adds Basic Auth, noindex and the
-ALIAS records. Production gets none of those, and its template is unchanged.
+ALIAS records. Production gets none of those; it gets the content security
+policy instead (stoa-frontend#533), report-only for now.
 """
 from __future__ import annotations
 
@@ -33,6 +34,31 @@ APP_DOMAIN = "app.stoaedu.ch"
 # key it reads. The store is created empty; the value is written by a person.
 BASIC_AUTH_FUNCTION_SOURCE = Path(__file__).with_name("preview_basic_auth.js")
 BASIC_AUTH_KVS_KEY = "basic-auth"
+
+# The policy app.stoaedu.ch is served with (stoa-frontend#533). It is held in
+# stoa-frontend, `scripts/content-security-policy.mjs`, where the dist e2e
+# serves the built app under it, enforced, and fails on any violation; this
+# copy must equal `contentSecurityPolicy(PRODUCTION_SOURCES)` there
+# (tests/component/contentSecurityPolicy533.test.ts pins the same string), and
+# the frontend smoke compares what production sends against it.
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch"
+    " https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+# Report-only first: the browser reports what the policy would block and
+# blocks nothing. Switched to `Content-Security-Policy` once the reports are
+# clean (stoa-frontend#533).
+CONTENT_SECURITY_POLICY_HEADER = "Content-Security-Policy-Report-Only"
 
 
 @dataclass(frozen=True)
@@ -101,9 +127,14 @@ class FrontendStack(Stack):
         )
 
         # Production passes no preview, so its behaviors get no function
-        # association and no response headers policy, exactly as before.
-        protection: dict[str, object] = {}
-        if preview is not None:
+        # association; its response headers policy is the content security
+        # policy, on every behavior: `/index.html` is also what the SPA
+        # fallback serves for `/` and every deep link.
+        if preview is None:
+            protection: dict[str, object] = {
+                "response_headers_policy": self._content_security_policy()
+            }
+        else:
             protection = self._preview_protection()
 
         def behavior(cache_policy: cloudfront.ICachePolicy) -> cloudfront.BehaviorOptions:
@@ -192,6 +223,23 @@ class FrontendStack(Stack):
         )
         route53.ARecord(self, "AliasA", zone=zone, record_name=app_domain, target=target)
         route53.AaaaRecord(self, "AliasAAAA", zone=zone, record_name=app_domain, target=target)
+
+    def _content_security_policy(self) -> cloudfront.ResponseHeadersPolicy:
+        """The content security policy, as one custom header (report-only)."""
+        return cloudfront.ResponseHeadersPolicy(
+            self,
+            "ContentSecurityPolicy",
+            comment="Content security policy for the SPA (stoa-frontend#533)",
+            custom_headers_behavior=cloudfront.ResponseCustomHeadersBehavior(
+                custom_headers=[
+                    cloudfront.ResponseCustomHeader(
+                        header=CONTENT_SECURITY_POLICY_HEADER,
+                        value=CONTENT_SECURITY_POLICY,
+                        override=True,
+                    )
+                ]
+            ),
+        )
 
     def _preview_protection(self) -> dict[str, object]:
         """Basic Auth function (JS 2.0, reads an empty KVS) and noindex headers."""

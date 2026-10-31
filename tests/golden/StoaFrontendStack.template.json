@@ -47,6 +47,24 @@
   }
  },
  "Resources": {
+  "ContentSecurityPolicyE16A92FE": {
+   "Properties": {
+    "ResponseHeadersPolicyConfig": {
+     "Comment": "Content security policy for the SPA (stoa-frontend#533)",
+     "CustomHeadersConfig": {
+      "Items": [
+       {
+        "Header": "Content-Security-Policy-Report-Only",
+        "Override": true,
+        "Value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+       }
+      ]
+     },
+     "Name": "StoaFrontendStackContentSecurityPolicyF6032D1D"
+    }
+   },
+   "Type": "AWS::CloudFront::ResponseHeadersPolicy"
+  },
   "StoaDistributionECAEA0FD": {
    "Properties": {
     "DistributionConfig": {
@@ -62,6 +80,9 @@
        "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
        "Compress": true,
        "PathPattern": "/index.html",
+       "ResponseHeadersPolicyId": {
+        "Ref": "ContentSecurityPolicyE16A92FE"
+       },
        "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
        "ViewerProtocolPolicy": "redirect-to-https"
       },
@@ -73,6 +94,9 @@
        "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
        "Compress": true,
        "PathPattern": "/served-release.json",
+       "ResponseHeadersPolicyId": {
+        "Ref": "ContentSecurityPolicyE16A92FE"
+       },
        "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
        "ViewerProtocolPolicy": "redirect-to-https"
       },
@@ -84,6 +108,9 @@
        "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
        "Compress": true,
        "PathPattern": "/runtime-config.json",
+       "ResponseHeadersPolicyId": {
+        "Ref": "ContentSecurityPolicyE16A92FE"
+       },
        "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
        "ViewerProtocolPolicy": "redirect-to-https"
       }
@@ -108,6 +135,9 @@
       ],
       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
       "Compress": true,
+      "ResponseHeadersPolicyId": {
+       "Ref": "ContentSecurityPolicyE16A92FE"
+      },
       "TargetOriginId": "StoaFrontendStackStoaDistributionOrigin1CDDBBE53",
       "ViewerProtocolPolicy": "redirect-to-https"
      },
