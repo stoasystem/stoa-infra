@@ -51,16 +51,13 @@
    "Properties": {
     "ResponseHeadersPolicyConfig": {
      "Comment": "Content security policy for the SPA (stoa-frontend#533)",
-     "CustomHeadersConfig": {
-      "Items": [
-       {
-        "Header": "Content-Security-Policy-Report-Only",
-        "Override": true,
-        "Value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-       }
-      ]
-     },
-     "Name": "StoaFrontendStackContentSecurityPolicyF6032D1D"
+     "Name": "StoaFrontendStackContentSecurityPolicyF6032D1D",
+     "SecurityHeadersConfig": {
+      "ContentSecurityPolicy": {
+       "ContentSecurityPolicy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+       "Override": true
+      }
+     }
     }
    },
    "Type": "AWS::CloudFront::ResponseHeadersPolicy"

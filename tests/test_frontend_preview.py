@@ -129,7 +129,7 @@ def test_production_frontend_templates_are_byte_for_byte_the_ones_from_main(
 ) -> None:
     """The golden files are app.py's synthesis at 112e2df, before infra#1;
     StoaFrontendStack's was regenerated for the content security policy
-    (stoa-frontend#533), its only change since.
+    (stoa-frontend#533), report-only and then enforced, its only changes since.
 
     A difference here is a change to production: to the bucket, to the
     distribution that serves app.stoaedu.ch, or to the release roles that
@@ -181,23 +181,19 @@ FRONTEND_POLICY = (
 )
 
 
-def test_production_sends_the_frontend_policy_report_only(
+def test_production_enforces_the_frontend_policy(
     templates: dict[str, dict[str, Any]],
 ) -> None:
-    """One header on every response, report-only: it blocks nothing yet."""
+    """One header on every response, enforced: `Content-Security-Policy` itself."""
     template = templates[PRODUCTION_FRONTEND]
     policy_id, policy = _only(template, "AWS::CloudFront::ResponseHeadersPolicy")
     config = policy["Properties"]["ResponseHeadersPolicyConfig"]
-    assert config["CustomHeadersConfig"]["Items"] == [
-        {
-            "Header": "Content-Security-Policy-Report-Only",
-            "Override": True,
-            "Value": FRONTEND_POLICY,
-        }
-    ]
+    assert config["SecurityHeadersConfig"] == {
+        "ContentSecurityPolicy": {"ContentSecurityPolicy": FRONTEND_POLICY, "Override": True}
+    }
     assert CONTENT_SECURITY_POLICY == FRONTEND_POLICY
-    # Not enforced, and nothing else rides along with it.
-    assert set(config) == {"Comment", "CustomHeadersConfig", "Name"}
+    # No report-only copy beside it, and nothing else rides along with it.
+    assert set(config) == {"Comment", "SecurityHeadersConfig", "Name"}
     # The SPA fallback serves /index.html for / and every deep link, so the
     # header must be on that behavior as on the others.
     behaviors = _behaviors(template)
