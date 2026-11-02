@@ -55,10 +55,10 @@ CONTENT_SECURITY_POLICY = "; ".join([
     "form-action 'self'",
     "frame-ancestors 'none'",
 ])
-# Report-only first: the browser reports what the policy would block and
-# blocks nothing. Switched to `Content-Security-Policy` once the reports are
-# clean (stoa-frontend#533).
-CONTENT_SECURITY_POLICY_HEADER = "Content-Security-Policy-Report-Only"
+# Enforced (stoa-frontend#533): it went out report-only first, and was switched
+# once the signed-in pages of a student, a teacher and an administrator had run
+# under it on production with no violation (2026-11-02). CloudFront takes the
+# enforced header only as a security header, not a custom one.
 
 
 @dataclass(frozen=True)
@@ -225,19 +225,16 @@ class FrontendStack(Stack):
         route53.AaaaRecord(self, "AliasAAAA", zone=zone, record_name=app_domain, target=target)
 
     def _content_security_policy(self) -> cloudfront.ResponseHeadersPolicy:
-        """The content security policy, as one custom header (report-only)."""
+        """The content security policy, enforced, as CloudFront's security header."""
         return cloudfront.ResponseHeadersPolicy(
             self,
             "ContentSecurityPolicy",
             comment="Content security policy for the SPA (stoa-frontend#533)",
-            custom_headers_behavior=cloudfront.ResponseCustomHeadersBehavior(
-                custom_headers=[
-                    cloudfront.ResponseCustomHeader(
-                        header=CONTENT_SECURITY_POLICY_HEADER,
-                        value=CONTENT_SECURITY_POLICY,
-                        override=True,
-                    )
-                ]
+            security_headers_behavior=cloudfront.ResponseSecurityHeadersBehavior(
+                content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
+                    content_security_policy=CONTENT_SECURITY_POLICY,
+                    override=True,
+                )
             ),
         )
 
