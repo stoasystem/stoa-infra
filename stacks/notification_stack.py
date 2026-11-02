@@ -43,6 +43,14 @@ class NotificationStack(Stack):
             dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=3, queue=dlq),
         )
 
+        # stoa-infra#12: nothing uses these queues any more and they are going
+        # away, but StoaApiStack and StoaMonitoringStack imported them. An export
+        # still in use cannot be deleted, so keep exporting them until the stacks
+        # that dropped the imports are deployed; the next change deletes them.
+        self.export_value(self.teacher_queue.queue_arn)
+        self.export_value(self.teacher_queue.queue_url)
+        self.export_value(dlq.queue_name)
+
         # SES email identity — only managed by the production stack.
         # Sandbox reuses the existing production SES identity via IAM permissions.
         if manage_ses_identity:

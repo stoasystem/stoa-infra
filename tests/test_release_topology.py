@@ -16,7 +16,6 @@ from stacks.database_stack import DatabaseStack
 from stacks.frontend_stack import FrontendStack
 from stacks.lambda_dist_guard import LambdaDistAsset
 from stacks.monitoring_stack import MonitoringStack
-from stacks.notification_stack import NotificationStack
 from stacks.release_delivery_stack import ReleaseDeliveryStack
 from stacks.storage_stack import StorageStack
 
@@ -260,7 +259,6 @@ def _api_stack(
     auth = AuthStack(app, "TestAuth", env=env)
     database = DatabaseStack(app, "TestDatabase", env=env)
     storage = StorageStack(app, "TestApiStorage", env=env)
-    notification = NotificationStack(app, "TestNotification", env=env)
     api = ApiStack(
         app,
         "TestApi",
@@ -273,7 +271,6 @@ def _api_stack(
         images_bucket=storage.images_bucket,
         reports_bucket=storage.reports_bucket,
         immutable_evidence_bucket=storage.immutable_evidence_bucket,
-        teacher_queue=notification.teacher_queue,
         env=env,
     )
     return app, storage, api
@@ -1056,7 +1053,6 @@ def test_every_function_answers_with_the_one_model(monkeypatch: Any, tmp_path: P
 def _monitoring_template(monkeypatch: Any, tmp_path: Path) -> dict[str, Any]:
     """The monitoring stack wired the way app.py wires it."""
     app, _, api = _api_stack(monkeypatch, tmp_path)
-    notification = app.node.find_child("TestNotification")
     monitoring = MonitoringStack(
         app,
         "TestMonitoring",
@@ -1071,7 +1067,6 @@ def _monitoring_template(monkeypatch: Any, tmp_path: Path) -> dict[str, Any]:
             "weekly-report": api.weekly_report_dlq,
             "dispatch-reconciler": api.dispatch_reconciler_dlq,
             "account-deletion": api.account_deletion_dlq,
-            "teacher-escalation": notification.teacher_escalation_dlq,
         },
         env=cdk.Environment(account=ACCOUNT, region=REGION),
     )
@@ -1118,7 +1113,6 @@ def test_every_alarm_reaches_a_person(monkeypatch: Any, tmp_path: Path) -> None:
         "stoa-weekly-report-dlq-messages",
         "stoa-dispatch-reconciler-dlq-messages",
         "stoa-account-deletion-dlq-messages",
-        "stoa-teacher-escalation-dlq-messages",
     } <= set(alarms)
     for name, alarm in alarms.items():
         if name.endswith("-dlq-messages"):
@@ -1192,7 +1186,6 @@ def test_app_py_wires_each_alarm_to_the_production_resource(
         "stoa-weekly-report-dlq-messages": (queue, "stoa-weekly-report-dlq"),
         "stoa-dispatch-reconciler-dlq-messages": (queue, "stoa-dispatch-reconciler-dlq"),
         "stoa-account-deletion-dlq-messages": (queue, "stoa-account-deletion-dlq"),
-        "stoa-teacher-escalation-dlq-messages": (queue, "stoa-teacher-escalation-dlq.fifo"),
     }
     topic_id = next(iter(_named_resources(monitoring, "AWS::SNS::Topic")))
     for alarm in _named_resources(monitoring, "AWS::CloudWatch::Alarm").values():

@@ -19,6 +19,14 @@ REQUIRED_PRODUCTION_KEYS = (
     "AUTHORIZATION_AUDIT_ACTIVE_KEY_ID",
     "STRIPE_CHECKOUT_WEB_ORIGINS",
 )
+# Keys CDK used to declare and has stopped declaring. The live snapshot still
+# carries them, and preserving them would keep the key alive forever.
+RETIRED_KEYS = frozenset(
+    {
+        # stoa-infra#12: the teacher-escalation queue is gone.
+        "TEACHER_QUEUE_URL",
+    }
+)
 
 
 def checkout_origins_for(env_name: str) -> str:
@@ -67,7 +75,7 @@ def merge_lambda_environment(
     merged = dict(declared)
     if live:
         for key, value in live.items():
-            if key not in merged:
+            if key not in merged and key not in RETIRED_KEYS:
                 merged[key] = value
     if env_name == "production" and live is not None:
         missing = [key for key in REQUIRED_PRODUCTION_KEYS if not merged.get(key)]
