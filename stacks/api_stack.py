@@ -73,7 +73,6 @@ class ApiStack(Stack):
         images_bucket: s3.Bucket,
         reports_bucket: s3.Bucket,
         immutable_evidence_bucket: s3.Bucket,
-        teacher_queue: sqs.Queue,
         env_name: str = "production",
         resource_prefix: str = "stoa",
         **kwargs,
@@ -122,7 +121,6 @@ class ApiStack(Stack):
                     "IMMUTABLE_AUDIT_STORAGE_CDK_MANAGED": "true",
                     "IMMUTABLE_AUDIT_STORAGE_RESOURCE": immutable_evidence_bucket.bucket_name,
                     "IMMUTABLE_AUDIT_STORAGE_PREFIX": "audit-retention/",
-                    "TEACHER_QUEUE_URL": teacher_queue.queue_url,
                     "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                     "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
                     "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
@@ -144,7 +142,6 @@ class ApiStack(Stack):
         images_bucket.grant_read_write(self.api_function)
         self._grant_report_artifact_read_write(reports_bucket, self.api_function)
         self._grant_immutable_evidence_access(immutable_evidence_bucket, self.api_function)
-        teacher_queue.grant_send_messages(self.api_function)
 
         self.weekly_report_function = lambda_.Function(
             self,

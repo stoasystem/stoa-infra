@@ -33,6 +33,20 @@ def test_merge_keeps_live_audit_keys_that_cdk_does_not_declare() -> None:
     assert merged["STRIPE_CHECKOUT_WEB_ORIGINS"] == '["https://app.stoaedu.ch"]'
 
 
+def test_merge_drops_a_retired_key_the_live_function_still_has() -> None:
+    merged = merge_lambda_environment(
+        {"ENVIRONMENT": "production", "STRIPE_CHECKOUT_WEB_ORIGINS": '["https://app.stoaedu.ch"]'},
+        {
+            "AUTHORIZATION_AUDIT_ACTIVE_KEY": "hex:ab",
+            "AUTHORIZATION_AUDIT_ACTIVE_KEY_ID": "prod-v1",
+            "TEACHER_QUEUE_URL": "https://sqs.example/stoa-teacher-escalation.fifo",
+        },
+        env_name="production",
+    )
+    assert "TEACHER_QUEUE_URL" not in merged
+    assert merged["AUTHORIZATION_AUDIT_ACTIVE_KEY_ID"] == "prod-v1"
+
+
 def test_merge_refuses_a_production_snapshot_that_would_drop_audit_material() -> None:
     with pytest.raises(RuntimeError, match="AUTHORIZATION_AUDIT_ACTIVE_KEY"):
         merge_lambda_environment(
