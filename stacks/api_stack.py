@@ -570,6 +570,37 @@ class ApiStack(Stack):
             ),
         )
 
+        # stoasystem/stoa-backend#250: the upload sweep. It cleans what an upload
+        # left in the images bucket once the upload is over, and it never ran:
+        # nothing scheduled it. The account-deletion function runs it, as it does
+        # the retention above: it already cleans uploads, with the same code,
+        # when it deletes an account, and its handler takes this job by name.
+        scheduler.CfnSchedule(
+            self,
+            "UploadCleanupSchedule",
+            name=f"{resource_prefix}-upload-cleanup",
+            group_name=f"{resource_prefix}-schedules",
+            description="Clean the bucket objects of uploads that have ended or expired.",
+            # An upload is usable for 30 minutes; a quarter of an hour after that
+            # is soon enough, and each run cleans at most a batch.
+            schedule_expression="rate(15 minutes)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.account_deletion_production_alias.function_arn,
+                role_arn=account_deletion_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"upload_cleanup"}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=900,
+                    maximum_retry_attempts=2,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=account_deletion_dlq.queue_arn,
+                ),
+            ),
+        )
+
         conversation_generation_dlq = sqs.Queue(
             self,
             "ConversationGenerationDLQ",
