@@ -1352,3 +1352,58 @@ def test_refused_images_are_deleted_by_a_daily_job_on_the_deletion_function(
     )
     images_bucket = function["Properties"]["Environment"]["Variables"]["S3_IMAGES_BUCKET"]
     assert "StoaImagesBucket" in json.dumps(images_bucket)
+
+
+def test_the_upload_sweep_runs_every_quarter_hour_on_the_deletion_function(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend#250: nothing ever scheduled the upload sweep."""
+    template = _api_template(monkeypatch, tmp_path)
+    alias_id, _ = _alias_by_function_and_name(template, "stoa-account-deletion", "production")
+
+    schedules = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::Scheduler::Schedule").values()
+        if resource["Properties"].get("Name") == "stoa-upload-cleanup"
+    ]
+    assert len(schedules) == 1, "the upload sweep would never run"
+    schedule = schedules[0]
+    assert schedule["ScheduleExpression"] == "rate(15 minutes)"
+    assert alias_id in json.dumps(schedule["Target"]["Arn"])
+    assert json.loads(schedule["Target"]["Input"]) == {
+        "source": "stoa.scheduler",
+        "job": "upload_cleanup",
+    }
+    assert schedule["Target"]["DeadLetterConfig"]["Arn"], "a failed run would vanish"
+
+
+def test_the_images_bucket_cleans_what_uploads_leave_and_keeps_old_attachments() -> None:
+    """stoasystem/stoa-backend#250.
+
+    Staging objects and their versions go; unfinished multipart uploads are
+    aborted. Attachments under `objects/` are read by version id, so no rule
+    expires noncurrent versions there: one past the year is still shown.
+    """
+    storage, _ = _templates()
+    [images] = [
+        bucket["Properties"]
+        for bucket in _named_resources(storage, "AWS::S3::Bucket").values()
+        if str(bucket["Properties"].get("BucketName", "")).startswith("stoa-images-")
+    ]
+    rules = {rule["Id"]: rule for rule in images["LifecycleConfiguration"]["Rules"]}
+
+    assert rules["ExpireAfterOneYear"]["ExpirationInDays"] == 365
+    staging = rules["ExpireLeftoverStagingUploads"]
+    assert staging["Prefix"] == "staging/"
+    assert staging["ExpirationInDays"] == 2
+    assert staging["NoncurrentVersionExpiration"]["NoncurrentDays"] == 7
+    assert (
+        rules["AbortIncompleteMultipartUploads"]["AbortIncompleteMultipartUpload"][
+            "DaysAfterInitiation"
+        ]
+        == 1
+    )
+    assert rules["RemoveExpiredDeleteMarkers"]["ExpiredObjectDeleteMarker"] is True
+    assert all(rule["Status"] == "Enabled" for rule in rules.values())
+    noncurrent = [rule for rule in rules.values() if "NoncurrentVersionExpiration" in rule]
+    assert [rule.get("Prefix") for rule in noncurrent] == ["staging/"]

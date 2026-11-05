@@ -49,7 +49,37 @@ class StorageStack(Stack):
             server_access_logs_bucket=self.logs_bucket,
             server_access_logs_prefix="images/",
             removal_policy=RemovalPolicy.RETAIN,
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(365))],
+            lifecycle_rules=[
+                s3.LifecycleRule(id="ExpireAfterOneYear", expiration=Duration.days(365)),
+                # stoasystem/stoa-backend#250. The upload sweep never ran and the
+                # table's TTL deleted upload rows before it could, so nothing knew
+                # what to delete from here. These clean what an upload leaves
+                # behind whether or not its row is still there.
+                #
+                # `staging/` holds an upload's bytes until they are checked and
+                # copied to `objects/`; an upload is usable for 30 minutes, so a
+                # staging object two days old is left over. Its versions go a week
+                # after that.
+                s3.LifecycleRule(
+                    id="ExpireLeftoverStagingUploads",
+                    prefix="staging/",
+                    expiration=Duration.days(2),
+                    noncurrent_version_expiration=Duration.days(7),
+                ),
+                # A multipart upload nobody completed holds its parts, billed and
+                # invisible to a listing of objects.
+                s3.LifecycleRule(
+                    id="AbortIncompleteMultipartUploads",
+                    abort_incomplete_multipart_upload_after=Duration.days(1),
+                ),
+                # A delete marker with no versions left behind it is clutter. Not a
+                # bucket-wide noncurrent expiry: attachments are read by version id,
+                # so one past the year above is still shown in its conversation.
+                s3.LifecycleRule(
+                    id="RemoveExpiredDeleteMarkers",
+                    expired_object_delete_marker=True,
+                ),
+            ],
         )
 
         # Weekly reports (private)
