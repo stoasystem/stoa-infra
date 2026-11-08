@@ -95,7 +95,16 @@ class ApiStack(Stack):
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.main.handler",
             code=lambda_code,
-            memory_size=1024,
+            # 1769 MB, not 1024, for BUG-008: Lambda hands out CPU in proportion
+            # to memory, and 1769 MB is where a function gets one full vCPU
+            # (1024 MB is about 0.6). Cold start here is almost all Python
+            # imports, which are CPU-bound, while the function itself only ever
+            # uses 180-220 MB. CloudWatch over 14 days (2026-11-08, read-only):
+            # Init Duration p50 4.09 s / p90 5.10 s, warm Duration p50 165 ms /
+            # p90 329 ms. Data, the before/after comparison and the cost check
+            # live in stoasystem/stoa-backend#306; go back to 1024 if Init
+            # Duration p50 does not drop by at least 20%.
+            memory_size=1769,
             timeout=Duration.seconds(29),
             # Lambda Insights is off because AWS does not publish it for arm64 in
             # eu-central-2, not because anything here lacks permission. The
