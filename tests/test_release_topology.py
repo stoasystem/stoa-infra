@@ -938,7 +938,9 @@ def test_the_generation_worker_outlives_the_api_request(monkeypatch: Any, tmp_pa
     assert properties["Runtime"] == "python3.12"
     assert properties["Architectures"] == ["arm64"]
     assert properties["Code"] == api["Properties"]["Code"]
-    assert properties["MemorySize"] == api["Properties"]["MemorySize"]
+    # Not tied to the API's: stoa-api went to 1769 MB for a full vCPU during
+    # cold start on the login path (#17), which the worker is not on.
+    assert properties["MemorySize"] >= 1024
     assert properties["Timeout"] >= 4 * api["Properties"]["Timeout"]
 
 
