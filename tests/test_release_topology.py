@@ -1379,6 +1379,55 @@ def test_the_upload_sweep_runs_every_quarter_hour_on_the_deletion_function(
     assert schedule["Target"]["DeadLetterConfig"]["Arn"], "a failed run would vanish"
 
 
+def test_the_audit_allow_stream_is_archived_daily_on_the_deletion_function(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend card 129: the stream that broke account deletion.
+
+    Nothing deleted an "allowed" audit row, so by 2026-11-03 the stream held
+    9,320 of the table's 15,646 items and the attachment retention scan gave up
+    past 10,000 (stoasystem/stoa-backend#127). The job archives a batch to the
+    Object Lock bucket and matches the read-back before the rows leave, so the
+    function needs that bucket in its environment, not only the API does.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    alias_id, _ = _alias_by_function_and_name(template, "stoa-account-deletion", "production")
+
+    schedules = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::Scheduler::Schedule").values()
+        if resource["Properties"].get("Name") == "stoa-security-audit-retention"
+    ]
+    assert len(schedules) == 1, "the allow stream would grow back without bound"
+    schedule = schedules[0]
+    assert schedule["ScheduleExpression"] == "rate(1 day)"
+    assert alias_id in json.dumps(schedule["Target"]["Arn"])
+    assert json.loads(schedule["Target"]["Input"])["job"] == "security_audit_retention"
+    assert schedule["Target"]["DeadLetterConfig"]["Arn"], "a failed run would vanish"
+
+    _, function = _resource_by_property(
+        template, "AWS::Lambda::Function", "FunctionName", "stoa-account-deletion"
+    )
+    variables = function["Properties"]["Environment"]["Variables"]
+    assert "StoaImmutableEvidence" in json.dumps(
+        variables["IMMUTABLE_AUDIT_STORAGE_RESOURCE"]
+    ), "with no bucket the job reads nothing and deletes nothing"
+    assert variables["IMMUTABLE_AUDIT_STORAGE_PREFIX"] == "audit-retention/"
+
+    # The read-back names the version the write returned, so GetObject alone is
+    # not enough; and nothing here may delete from the WORM bucket.
+    statements = [
+        statement
+        for policy in _named_resources(template, "AWS::IAM::Policy").values()
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        if "audit-retention/*" in json.dumps(statement.get("Resource", ""))
+    ]
+    assert statements, "the archive would have nowhere to go"
+    granted = {action for statement in statements for action in statement["Action"]}
+    assert {"s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"} <= granted
+    assert not any(action.startswith("s3:Delete") for action in granted)
+
+
 def test_the_images_bucket_cleans_what_uploads_leave_and_keeps_old_attachments() -> None:
     """stoasystem/stoa-backend#250.
 

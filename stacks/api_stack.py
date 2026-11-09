@@ -256,6 +256,13 @@ class ApiStack(Stack):
                     # (stoasystem/stoa-backend#139). Without this the code's
                     # default bucket name is not the deployed bucket's.
                     "S3_IMAGES_BUCKET": images_bucket.bucket_name,
+                    # The daily authorization-audit retention writes its archive
+                    # here before the rows leave the table (card 129). Without a
+                    # bucket the job reads nothing and deletes nothing.
+                    "IMMUTABLE_AUDIT_STORAGE_MODE": "cdk_managed",
+                    "IMMUTABLE_AUDIT_STORAGE_CDK_MANAGED": "true",
+                    "IMMUTABLE_AUDIT_STORAGE_RESOURCE": immutable_evidence_bucket.bucket_name,
+                    "IMMUTABLE_AUDIT_STORAGE_PREFIX": "audit-retention/",
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                     **carried_audit_keys,
                 },
@@ -603,6 +610,40 @@ class ApiStack(Stack):
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
                     maximum_event_age_in_seconds=900,
                     maximum_retry_attempts=2,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=account_deletion_dlq.queue_arn,
+                ),
+            ),
+        )
+
+        # stoasystem/stoa-backend card 129: one audit row per sensitive "allowed"
+        # decision, none of which ever left the table - 9,320 of 15,646 items by
+        # 2026-11-03, which is what pushed the attachment retention scan past its
+        # 10,000-item cap and broke account deletion (#127). The archive goes to
+        # the Object Lock bucket and is read back and matched before the rows are
+        # deleted, so this cannot be the table's own TTL. The account-deletion
+        # function runs it: it already holds the table and may write under the
+        # evidence bucket's audit prefix.
+        scheduler.CfnSchedule(
+            self,
+            "SecurityAuditRetentionSchedule",
+            name=f"{resource_prefix}-security-audit-retention",
+            group_name=f"{resource_prefix}-schedules",
+            description="Archive authorization allow events 90 days on, then delete them.",
+            # Days are the unit of the retention, and a batch a run: a backlog
+            # drains over a few days instead of in one ten-minute function.
+            schedule_expression="rate(1 day)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.account_deletion_production_alias.function_arn,
+                role_arn=account_deletion_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"security_audit_retention","limit":500}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=3_600,
+                    maximum_retry_attempts=3,
                 ),
                 dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
                     arn=account_deletion_dlq.queue_arn,
@@ -985,6 +1026,12 @@ class ApiStack(Stack):
         function.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "s3:GetObject",
+                # The audit retention reads its archive back by the version id the
+                # write returned, which S3 authorizes as GetObjectVersion. Without
+                # it the archive lands and the read-back is AccessDenied, which
+                # deletes nothing but leaves an orphan object in a WORM bucket
+                # this role cannot delete from (card 129 audit).
+                "s3:GetObjectVersion",
                 "s3:PutObject",
             ],
             resources=[immutable_evidence_bucket.arn_for_objects("audit-retention/*")],
