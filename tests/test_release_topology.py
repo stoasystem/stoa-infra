@@ -357,8 +357,8 @@ def test_lambda_versions_and_aliases_bind_api_and_scheduler(
     ]
     assert len(github_update_policies) == 1
     github_statements = _statements(github_update_policies[0])
-    assert len(github_statements) == 2
-    function_update, alias_update = github_statements
+    assert len(github_statements) == 3
+    function_update, alias_update, _seed_stamp_read = github_statements
     assert set(function_update["Action"]) == {
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
@@ -652,6 +652,9 @@ PUBLIC_ROUTE_KEYS = {
     "POST /auth/register",
     "POST /auth/reset-password",
     "POST /billing/webhooks/stripe",
+    # The signed token in the query is the credential (stoa-backend#363).
+    "POST /notifications/email-resubscribe",
+    "POST /notifications/email-unsubscribe",
     "POST /teacher-applications",
     "POST /teacher-applications/activation/claim",
     # The phone that scanned a one-time upload code is not signed in
@@ -1017,9 +1020,44 @@ def test_the_deploy_role_can_update_the_worker(monkeypatch: Any, tmp_path: Path)
         for resource in _named_resources(template, "AWS::IAM::Policy").values()
         if resource["Properties"].get("PolicyName") == "stoa-github-backend-alias-update"
     )
-    function_update, alias_update = _statements(policy)
+    function_update, alias_update, _seed_stamp_read = _statements(policy)
     assert "StoaConversationGenerationFunction" in json.dumps(function_update["Resource"])
     assert "StoaConversationGenerationProductionAlias" in json.dumps(alias_update["Resource"])
+
+
+def test_the_deploy_role_reads_only_the_curriculum_partition(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The post-deploy seed check reads one row (stoa-backend#317, stoa-infra#19).
+
+    IAM narrows DynamoDB only by partition key, so the grant is GetItem on the
+    PRACTICE partition of the main table: course content, no student data, and
+    no Query, Scan or write.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    policy = next(
+        resource
+        for resource in _named_resources(template, "AWS::IAM::Policy").values()
+        if resource["Properties"].get("PolicyName") == "stoa-github-backend-alias-update"
+    )
+    dynamodb = [
+        statement
+        for statement in _statements(policy)
+        if any(str(action).startswith("dynamodb:") for action in _as_list(statement["Action"]))
+    ]
+
+    assert len(dynamodb) == 1
+    [statement] = dynamodb
+    assert _as_list(statement["Action"]) == ["dynamodb:GetItem"]
+    assert statement["Condition"] == {
+        "ForAllValues:StringEquals": {"dynamodb:LeadingKeys": ["PRACTICE"]}
+    }
+    resources = json.dumps(statement["Resource"])
+    assert "Arn" in resources and "/index/" not in resources
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else [value]
 
 
 def test_the_live_environment_snapshot_asks_about_the_worker() -> None:

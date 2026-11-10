@@ -464,6 +464,22 @@ class ApiStack(Stack):
                                 self.conversation_generation_production_alias.function_arn,
                             ],
                         },
+                        {
+                            # After a deploy the backend pipeline reads one row, the
+                            # curriculum seed stamp (PK=PRACTICE, SK=CURRICULUM_SEED),
+                            # and warns when the table lags the code
+                            # (stoa-backend#317). IAM can only narrow by partition
+                            # key, so this is the PRACTICE partition: course content
+                            # and the stamp, no student data. GetItem only.
+                            "Effect": "Allow",
+                            "Action": ["dynamodb:GetItem"],
+                            "Resource": [table.table_arn],
+                            "Condition": {
+                                "ForAllValues:StringEquals": {
+                                    "dynamodb:LeadingKeys": ["PRACTICE"],
+                                },
+                            },
+                        },
                     ],
                 },
             )
@@ -942,6 +958,13 @@ class ApiStack(Stack):
             ("/upload-codes/redeem", [apigwv2.HttpMethod.POST]),
             ("/upload-codes/parts/{part_number}", [apigwv2.HttpMethod.POST]),
             ("/upload-codes/complete", [apigwv2.HttpMethod.POST]),
+            # The unsubscribe link in a notification email (stoa-backend#363). A mail
+            # client's RFC 8058 one-click POST carries no session, and neither does
+            # the frontend page a reader lands on from the email. The HMAC-signed
+            # token in the query names one person and one kind of email and is the
+            # credential; the handler refuses anything it did not sign.
+            ("/notifications/email-unsubscribe", [apigwv2.HttpMethod.POST]),
+            ("/notifications/email-resubscribe", [apigwv2.HttpMethod.POST]),
         ]:
             added = http_api.add_routes(
                 path=path,
