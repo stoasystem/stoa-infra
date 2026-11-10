@@ -309,12 +309,57 @@ def _alias_by_function_and_name(
     return matches[0]
 
 
+def test_every_lambda_log_group_is_kept_90_days_without_being_replaced(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """#20: Lambda logs may hold student-related detail and were kept forever."""
+    template = _api_template(monkeypatch, tmp_path)
+    functions = _named_resources(template, "AWS::Lambda::Function")
+    named = {
+        logical_id: resource["Properties"]["FunctionName"]
+        for logical_id, resource in functions.items()
+        if "FunctionName" in resource["Properties"]
+    }
+    assert set(named.values()) == {
+        "stoa-api",
+        "stoa-weekly-report",
+        "stoa-dispatch-reconciler",
+        "stoa-account-deletion",
+        "stoa-conversation-generation",
+    }
+
+    retention_by_function: dict[str, int] = {}
+    for resource in _named_resources(template, "Custom::LogRetention").values():
+        properties = resource["Properties"]
+        parts = properties["LogGroupName"]["Fn::Join"][1]
+        assert parts[0] == "/aws/lambda/"
+        retention_by_function[parts[1]["Ref"]] = properties["RetentionInDays"]
+    assert retention_by_function == {logical_id: 90 for logical_id in named}
+
+    # The groups exist already, created by Lambda. Declaring one here would
+    # fail the deploy, because the name is taken, unless it were first brought
+    # in with `cdk import`. Only the gateway's own access log is declared.
+    declared = [
+        resource["Properties"].get("LogGroupName")
+        for resource in _named_resources(template, "AWS::Logs::LogGroup").values()
+    ]
+    assert declared == ["/aws/apigateway/stoa-api/access"]
+    access_log = next(iter(_named_resources(template, "AWS::Logs::LogGroup").values()))
+    assert access_log["Properties"]["RetentionInDays"] == 90
+
+
 def test_lambda_versions_and_aliases_bind_api_and_scheduler(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     template = _api_template(monkeypatch, tmp_path)
     aliases = _named_resources(template, "AWS::Lambda::Alias")
-    functions = _named_resources(template, "AWS::Lambda::Function")
+    # The application's functions are the named ones. CDK's own unnamed
+    # provider (the log retention handler, #20) is not released and has no alias.
+    functions = {
+        logical_id: resource
+        for logical_id, resource in _named_resources(template, "AWS::Lambda::Function").items()
+        if "FunctionName" in resource["Properties"]
+    }
     # Every deployed function is reached through an alias, never $LATEST.
     assert len(aliases) >= len(functions)
     assert {resource["Properties"]["Name"] for resource in aliases.values()} == {

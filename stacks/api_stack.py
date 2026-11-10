@@ -58,6 +58,20 @@ GATEWAY_CORS_HEADERS = ("Authorization", "Content-Type", "Accept-Language", "Ide
 # second is room for many classrooms at once.
 UPLOAD_CODE_ROUTE_THROTTLE = {"ThrottlingRateLimit": 5, "ThrottlingBurstLimit": 10}
 
+# How long CloudWatch keeps what these functions and the gateway log (#20).
+# Lambda logs can carry student-related detail (error context, request context),
+# and until this was set they were kept forever, outliving even a deleted
+# account. 90 days matches the API access log, which had it from the start.
+#
+# The functions take it as `log_retention`, not as a `log_group` declared here.
+# Their groups were created by Lambda on first invocation and already hold logs.
+# A declared AWS::Logs::LogGroup with the same name fails to create (the name is
+# taken) unless it is first imported with `cdk import`, which the merge-to-main
+# deploy does not do. `log_retention` leaves the groups where they are and only
+# calls PutRetentionPolicy on them; removing it later keeps the groups (CDK's
+# default RemovalPolicy for it is RETAIN), so no log is ever deleted by this.
+LOG_RETENTION = logs.RetentionDays.THREE_MONTHS
+
 
 class ApiStack(Stack):
     def __init__(
@@ -91,6 +105,7 @@ class ApiStack(Stack):
             self,
             "StoaApiFunction",
             function_name=f"{resource_prefix}-api",
+            log_retention=LOG_RETENTION,
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.main.handler",
@@ -156,6 +171,7 @@ class ApiStack(Stack):
             self,
             "StoaWeeklyReportFunction",
             function_name=f"{resource_prefix}-weekly-report",
+            log_retention=LOG_RETENTION,
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.jobs.weekly_reports.handler",
@@ -197,6 +213,7 @@ class ApiStack(Stack):
             self,
             "StoaDispatchReconcilerFunction",
             function_name=f"{resource_prefix}-dispatch-reconciler",
+            log_retention=LOG_RETENTION,
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.jobs.dispatch_reconciler.handler",
@@ -235,6 +252,7 @@ class ApiStack(Stack):
             self,
             "StoaAccountDeletionFunction",
             function_name=f"{resource_prefix}-account-deletion",
+            log_retention=LOG_RETENTION,
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.jobs.account_deletion.handler",
@@ -282,6 +300,7 @@ class ApiStack(Stack):
             self,
             "StoaConversationGenerationFunction",
             function_name=f"{resource_prefix}-conversation-generation",
+            log_retention=LOG_RETENTION,
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="stoa.jobs.conversation_generation.handler",
@@ -874,7 +893,7 @@ class ApiStack(Stack):
             self,
             "StoaHttpApiAccessLogs",
             log_group_name=f"/aws/apigateway/{resource_prefix}-api/access",
-            retention=logs.RetentionDays.THREE_MONTHS,
+            retention=LOG_RETENTION,
             removal_policy=RemovalPolicy.RETAIN,
         )
         self.api_access_logs = access_logs
