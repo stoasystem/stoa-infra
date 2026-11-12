@@ -99,6 +99,30 @@ def test_any_unfinished_run_stops_the_deploy(status: str) -> None:
              "not finished")
 
 
+def _abandoned(**changes: Any) -> dict[str, Any]:
+    [(run_id, sha)] = check.ABANDONED_RUNS.items()
+    return {**_run(run_id, sha=sha, status="queued", conclusion=None), **changes}
+
+
+def test_a_run_github_will_never_start_does_not_stop_the_deploy() -> None:
+    assert _settled(FakeGitHub([_run(2**40), _abandoned()])) == HEAD
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"status": "in_progress"}, {"status": "pending"}, {"head_sha": OLDER}, {"id": 7}],
+)
+def test_an_abandoned_run_that_no_longer_looks_abandoned_stops_the_deploy(
+    changes: dict[str, Any],
+) -> None:
+    _refused(FakeGitHub([_run(2**40), _abandoned(**changes)]), "not finished")
+
+
+def test_an_abandoned_run_is_never_the_release_being_confirmed() -> None:
+    [sha] = check.ABANDONED_RUNS.values()
+    _refused(FakeGitHub([_abandoned()]), "not finished", git=_git(local=sha, remote=sha))
+
+
 def test_an_unfinished_run_of_another_trigger_still_stops_the_deploy() -> None:
     github = FakeGitHub(
         [_run(3), _run(2, status="in_progress", conclusion=None, event="workflow_dispatch")]
