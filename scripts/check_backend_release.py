@@ -6,7 +6,7 @@ backend pipeline has not shipped, or races a backend release that is running.
 It is not a lock: the backend pipeline can still start after it passes.
 
 `settled` stops when any run of the backend production workflow is unfinished,
-whatever its trigger, or when the checked-out HEAD, remote main and the latest
+whatever its trigger (the runs named in `ABANDONED_RUNS` aside), or when the checked-out HEAD, remote main and the latest
 main-push run for that commit do not agree on a successful release.
 
 `dist` stops when the built Lambda dist was not built from that same commit, or
@@ -38,6 +38,17 @@ PAGE_SIZE = 100
 API_TIMEOUT_SECONDS = 30
 MANIFEST_NAME = ".stoa-build-manifest.json"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
+
+# Runs GitHub will never start, by id, with the commit each was created for.
+# 43095114644 was created on 2026-11-11 for a push to backend main and never
+# left the queue: no job was created, and GitHub refuses to cancel it ("not
+# queued yet"), re-run it ("already running") or delete it. Its commit shipped
+# with the next push. It is passed over only while it still looks exactly like
+# that - queued, for that commit - so the day it starts it stops deploys again.
+# Remove an entry once the run is gone from the list.
+ABANDONED_RUNS: dict[int, str] = {
+    43095114644: "927ad1fa2badbbf411dc9f87f9ac0d8b74045952",
+}
 
 Fetch = Callable[[str], dict[str, Any]]
 Git = Callable[[Sequence[str]], str]
@@ -155,6 +166,12 @@ def check_settled(
             raise BackendReleaseNotSettled(f"run {run['id']} has no head_branch")
         if not isinstance(run["head_branch"], (str, type(None))):
             raise BackendReleaseNotSettled(f"run {run['id']} has a malformed head_branch")
+        if (
+            status == "queued"
+            and run["head_sha"] != local
+            and ABANDONED_RUNS.get(run["id"]) == run["head_sha"]
+        ):
+            continue
         if status != "completed":
             unfinished.append(f"{run.get('id')} ({status}, {run.get('event')})")
     if unfinished:
