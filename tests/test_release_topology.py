@@ -1376,6 +1376,93 @@ def test_the_waiting_filter_matches_the_event_the_backend_logs(
     assert f'"event_category={event}"' in patterns
 
 
+def test_the_owner_registry_is_swept_daily_on_the_deletion_function(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend#397: the registry path waits on this run's result.
+
+    The API accepts a deletion for the registry path only when the sweep's last
+    result is complete, clean and under 36 hours old. With no schedule there is
+    no result, and every deletion keeps scanning the whole table.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    alias_id, _ = _alias_by_function_and_name(template, "stoa-account-deletion", "production")
+
+    schedules = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::Scheduler::Schedule").values()
+        if resource["Properties"].get("Name") == "stoa-owner-registry-sweep"
+    ]
+    assert len(schedules) == 1, "the sweep would never run"
+    schedule = schedules[0]
+    # Daily keeps the result inside the backend's 36-hour limit with one missed run to spare.
+    assert schedule["ScheduleExpression"] == "rate(1 day)"
+    assert alias_id in json.dumps(schedule["Target"]["Arn"])
+    assert json.loads(schedule["Target"]["Input"]) == {
+        "source": "stoa.scheduler",
+        "job": "owner_registry_sweep",
+    }
+    assert schedule["Target"]["DeadLetterConfig"]["Arn"], "a failed run would vanish"
+
+
+def test_an_owner_registry_sweep_finding_pages(monkeypatch: Any, tmp_path: Path) -> None:
+    """The sweep is report-only: unwatched, its log line is read by nobody."""
+    template = _monitoring_template(monkeypatch, tmp_path)
+    [topic_id] = _named_resources(template, "AWS::SNS::Topic")
+    [alarm] = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::CloudWatch::Alarm").values()
+        if resource["Properties"].get("AlarmName") == "stoa-owner-registry-sweep-findings"
+    ]
+    assert alarm["Namespace"] == "Stoa/AccountDeletion"
+    assert alarm["MetricName"] == "OwnerRegistrySweepFindings"
+    assert alarm["Statistic"] == "Sum"
+    assert alarm["Period"] == 86_400
+    assert alarm["Threshold"] == 1
+    assert alarm["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+    # The daily run is not aligned to the daily periods: any line in the last
+    # two keeps the alarm raised while the finding stands.
+    assert alarm["EvaluationPeriods"] == 2
+    assert alarm["DatapointsToAlarm"] == 1
+    assert alarm["TreatMissingData"] == "notBreaching"
+    assert alarm["AlarmActions"] == [{"Ref": topic_id}]
+    [metric_filter] = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
+        if "owner_registry_sweep_findings" in resource["Properties"]["FilterPattern"]
+    ]
+    joined = metric_filter["LogGroupName"]["Fn::Join"]
+    assert joined[0] == "" and joined[1][0] == "/aws/lambda/"
+    assert "StoaAccountDeletionFunction" in joined[1][1]["Fn::ImportValue"]
+    [transformation] = metric_filter["MetricTransformations"]
+    assert transformation["MetricName"] == "OwnerRegistrySweepFindings"
+    assert transformation["MetricNamespace"] == "Stoa/AccountDeletion"
+    assert transformation["MetricValue"] == "1"
+
+
+def test_the_sweep_filter_matches_the_lines_the_backend_logs(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A renamed log line would leave the alarm watching for one nobody writes."""
+    import re
+
+    from stacks.lambda_dist_guard import DEFAULT_BACKEND_ROOT
+    from stacks.monitoring_stack import OWNER_REGISTRY_SWEEP_EVENTS
+
+    source = (
+        DEFAULT_BACKEND_ROOT / "src" / "stoa" / "jobs" / "owner_registry_sweep.py"
+    ).read_text(encoding="utf-8")
+    logged = set(re.findall(r'logger\.warning\(\s*"(owner_registry_sweep_[a-z_]+)', source))
+    assert logged == set(OWNER_REGISTRY_SWEEP_EVENTS)
+    template = _monitoring_template(monkeypatch, tmp_path)
+    [pattern] = [
+        resource["Properties"]["FilterPattern"]
+        for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
+        if "owner_registry_sweep" in resource["Properties"]["FilterPattern"]
+    ]
+    assert pattern == " ".join(f'?"{event}"' for event in OWNER_REGISTRY_SWEEP_EVENTS)
+
+
 def _ses_statements_for(template: dict[str, Any], function_name_suffix: str) -> list[dict[str, Any]]:
     functions = [
         resource
