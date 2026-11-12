@@ -155,6 +155,15 @@ class ApiStack(Stack):
                     "APP_BASE_URL": (
                         "https://app.stoaedu.ch" if env_name == "production" else "http://localhost:5173"
                     ),
+                    # stoasystem/stoa-backend#397: a deletion accepted from now
+                    # on reads the account's registered partitions instead of
+                    # scanning the whole table. The API decides this when it
+                    # accepts the request, and only while the daily owner
+                    # registry sweep (scheduled below) vouches for the registry:
+                    # complete, nothing missing, under 36 hours old. Otherwise
+                    # it falls back to the scan by itself. Deletions already
+                    # accepted keep the path they were accepted under.
+                    "ACCOUNT_DELETION_REGISTRY_PATH": "true",
                 },
                 load_live_lambda_environment(f"{resource_prefix}-api", env_name=env_name),
                 env_name=env_name,

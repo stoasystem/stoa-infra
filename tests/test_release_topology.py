@@ -1405,6 +1405,28 @@ def test_the_owner_registry_is_swept_daily_on_the_deletion_function(
     assert schedule["Target"]["DeadLetterConfig"]["Arn"], "a failed run would vanish"
 
 
+def test_deletions_are_accepted_for_the_registry_path_only_beside_the_sweep(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend#397: the switch and the sweep ship together.
+
+    The API reads the switch when it accepts a deletion, so that is the function
+    that carries it. The backend falls back to the scan when the sweep's result
+    is missing or stale, so the switch without the schedule would do nothing -
+    and nobody would see why.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    _, api_function = _resource_by_property(
+        template, "AWS::Lambda::Function", "FunctionName", "stoa-api"
+    )
+    variables = api_function["Properties"]["Environment"]["Variables"]
+    assert variables["ACCOUNT_DELETION_REGISTRY_PATH"] == "true"
+    assert any(
+        resource["Properties"].get("Name") == "stoa-owner-registry-sweep"
+        for resource in _named_resources(template, "AWS::Scheduler::Schedule").values()
+    ), "with no sweep result every deletion keeps scanning the table"
+
+
 def test_an_owner_registry_sweep_finding_pages(monkeypatch: Any, tmp_path: Path) -> None:
     """The sweep is report-only: unwatched, its log line is read by nobody."""
     template = _monitoring_template(monkeypatch, tmp_path)
