@@ -32,6 +32,13 @@ from constructs import Construct
 # that ConfirmationWasAuthenticated is "true". CloudFormation has no property
 # for this, so it is lost whenever the subscription is replaced.
 ALERT_EMAIL_PARAMETER = "/stoa/alerts/email"
+# What the backend's daily owner registry sweep logs when it has something to
+# say (stoasystem/stoa-backend `src/stoa/jobs/owner_registry_sweep.py`).
+OWNER_REGISTRY_SWEEP_EVENTS = (
+    "owner_registry_sweep_findings",
+    "owner_registry_sweep_incomplete",
+    "owner_registry_sweep_marker_failed",
+)
 
 
 class MonitoringStack(Stack):
@@ -174,6 +181,43 @@ class MonitoringStack(Stack):
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
             )
             waiting_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        if account_deletion_function is not None:
+            # stoasystem/stoa-backend#397: the daily owner registry sweep is
+            # report-only, so its log line is the only place a finding shows -
+            # a row that names an account in a partition the account has not
+            # registered (the registry path would not read it when that account
+            # is deleted), a row a deleted account left behind, a walk that did
+            # not finish, or a result that could not be recorded. The sweep runs
+            # once a day, not aligned to the alarm's daily periods, so the alarm
+            # is raised on any line in the last two periods and stays up while
+            # the finding does. The event names are the backend's; a test reads
+            # them from the backend checkout.
+            sweep_findings = logs.MetricFilter(
+                self,
+                "OwnerRegistrySweepFindingsFilter",
+                log_group=logs.LogGroup.from_log_group_name(
+                    self,
+                    "AccountDeletionLogs",
+                    f"/aws/lambda/{account_deletion_function.function_name}",
+                ),
+                metric_namespace="Stoa/AccountDeletion",
+                metric_name="OwnerRegistrySweepFindings",
+                filter_pattern=logs.FilterPattern.any_term(*OWNER_REGISTRY_SWEEP_EVENTS),
+                metric_value="1",
+            )
+            sweep_alarm = cw.Alarm(
+                self,
+                "OwnerRegistrySweepFindingsAlarm",
+                alarm_name="stoa-owner-registry-sweep-findings",
+                metric=sweep_findings.metric(statistic="Sum", period=Duration.days(1)),
+                threshold=1,
+                evaluation_periods=2,
+                datapoints_to_alarm=1,
+                comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            )
+            sweep_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
         # Dashboard
         dashboard = cw.Dashboard(self, "StoaDashboard", dashboard_name="STOA-Overview")

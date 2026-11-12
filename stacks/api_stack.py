@@ -686,6 +686,37 @@ class ApiStack(Stack):
             ),
         )
 
+        # stoasystem/stoa-backend#397: once a day, one walk over the table checks
+        # every account's owner registry - rows that name an account in a
+        # partition it has not registered, and rows a deleted account left
+        # behind. Report-only: its one write is its own result row, which the
+        # API reads before it accepts a deletion for the registry path, and a
+        # result older than 36 hours counts as none. Without this schedule that
+        # path can never be taken.
+        scheduler.CfnSchedule(
+            self,
+            "OwnerRegistrySweepSchedule",
+            name=f"{resource_prefix}-owner-registry-sweep",
+            group_name=f"{resource_prefix}-schedules",
+            description="Check every account's owner registry and record the result.",
+            schedule_expression="rate(1 day)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF",
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.account_deletion_production_alias.function_arn,
+                role_arn=account_deletion_scheduler_role.role_arn,
+                input='{"source":"stoa.scheduler","job":"owner_registry_sweep"}',
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=3_600,
+                    maximum_retry_attempts=3,
+                ),
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=account_deletion_dlq.queue_arn,
+                ),
+            ),
+        )
+
         conversation_generation_dlq = sqs.Queue(
             self,
             "ConversationGenerationDLQ",
