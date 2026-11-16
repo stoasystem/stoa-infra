@@ -172,10 +172,15 @@ def test_frontend_stack_defaults_are_production() -> None:
 # tests/component/contentSecurityPolicy533.test.ts pins it. A change to the
 # policy is made there first, where the dist e2e serves the app under it.
 FRONTEND_POLICY = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; "
+    "script-src 'self' https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net; "
+    "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob:; font-src 'self' data:; "
     "connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch "
-    "https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com; "
+    "https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com "
+    "https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net https://prod-ks.pluot.blue "
+    "wss://*.daily.co wss://*.dailywebrtc.com wss://*.dailywebrtc.net; "
+    "frame-src https://*.trycloudflare.com; "
     "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; "
     "form-action 'self'; frame-ancestors 'none'"
 )
