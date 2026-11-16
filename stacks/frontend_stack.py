@@ -43,12 +43,18 @@ BASIC_AUTH_KVS_KEY = "basic-auth"
 # the frontend smoke compares what production sends against it.
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch"
-    " https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com",
+    " https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com"
+    " https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net https://prod-ks.pluot.blue"
+    " wss://*.daily.co wss://*.dailywebrtc.com wss://*.dailywebrtc.net",
+    # The virtual classroom (stoa-frontend#696): its WBO whiteboard is framed
+    # from a Cloudflare quick tunnel during the demo phase, whose host changes
+    # on every restart, so the domain is named; Daily is its voice.
+    "frame-src https://*.trycloudflare.com",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
