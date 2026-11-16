@@ -129,7 +129,8 @@ def test_production_frontend_templates_are_byte_for_byte_the_ones_from_main(
 ) -> None:
     """The golden files are app.py's synthesis at 112e2df, before infra#1;
     StoaFrontendStack's was regenerated for the content security policy
-    (stoa-frontend#533), report-only and then enforced, its only changes since.
+    (stoa-frontend#533), report-only and then enforced, and again for the
+    virtual classroom's sources (stoa-frontend#696), its only changes since.
 
     A difference here is a change to production: to the bucket, to the
     distribution that serves app.stoaedu.ch, or to the release roles that
@@ -172,10 +173,15 @@ def test_frontend_stack_defaults_are_production() -> None:
 # tests/component/contentSecurityPolicy533.test.ts pins it. A change to the
 # policy is made there first, where the dist e2e serves the app under it.
 FRONTEND_POLICY = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; "
+    "script-src 'self' https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net; "
+    "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob:; font-src 'self' data:; "
     "connect-src 'self' https://api.stoaedu.ch wss://api.stoaedu.ch "
-    "https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com; "
+    "https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com "
+    "https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net https://prod-ks.pluot.blue "
+    "wss://*.daily.co wss://*.dailywebrtc.com wss://*.dailywebrtc.net; "
+    "frame-src https://board.stoaedu.ch; "
     "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; "
     "form-action 'self'; frame-ancestors 'none'"
 )
