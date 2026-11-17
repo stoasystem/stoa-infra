@@ -1198,6 +1198,7 @@ def test_every_alarm_reaches_a_person(monkeypatch: Any, tmp_path: Path) -> None:
         "stoa-weekly-report-dlq-messages",
         "stoa-dispatch-reconciler-dlq-messages",
         "stoa-account-deletion-dlq-messages",
+        "stoa-voice-transcription-refused",
     } <= set(alarms)
     for name, alarm in alarms.items():
         if name.endswith("-dlq-messages"):
@@ -1374,6 +1375,70 @@ def test_the_waiting_filter_matches_the_event_the_backend_logs(
         for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
     }
     assert f'"event_category={event}"' in patterns
+
+
+def test_a_refused_voice_recording_pages_someone(monkeypatch: Any, tmp_path: Path) -> None:
+    """stoasystem/stoa-backend#478, stoa-infra#28: the model refusing audio pages.
+
+    If Bedrock refuses the recordings, every voice question fails and the
+    student sees only "temporarily unavailable". Normally zero; one is enough.
+    """
+    template = _monitoring_template(monkeypatch, tmp_path)
+    topic_id = next(iter(_named_resources(template, "AWS::SNS::Topic")))
+    refused = _alarms(template)["stoa-voice-transcription-refused"]
+    assert refused["Namespace"] == "Stoa/VoiceQuestions"
+    assert refused["MetricName"] == "TranscriptionRefused"
+    assert refused["Statistic"] == "Sum"
+    assert refused["Period"] == 300
+    assert refused["Threshold"] == 1
+    assert refused["EvaluationPeriods"] == 1
+    assert refused["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+    # No voice question asked is no refusal, not a reason to page.
+    assert refused["TreatMissingData"] == "notBreaching"
+    assert refused["AlarmActions"] == [{"Ref": topic_id}]
+
+    [metric_filter] = [
+        resource["Properties"]
+        for resource in _named_resources(template, "AWS::Logs::MetricFilter").values()
+        if resource["Properties"]["MetricTransformations"][0]["MetricName"]
+        == "TranscriptionRefused"
+    ]
+    # The exact phrase: "voice transcription failed" (every other failure) does
+    # not contain it, so a timeout or throttle does not page as a refusal.
+    assert metric_filter["FilterPattern"] == '"voice transcription refused"'
+    # stoa-api's own log group: the transcription endpoint runs there.
+    joined = metric_filter["LogGroupName"]["Fn::Join"]
+    assert joined[0] == "" and joined[1][0] == "/aws/lambda/"
+    assert "StoaApiFunction" in json.dumps(joined[1][1])
+    [transformation] = metric_filter["MetricTransformations"]
+    assert transformation["MetricNamespace"] == "Stoa/VoiceQuestions"
+    assert transformation["MetricValue"] == "1"
+
+
+def test_the_refusal_filter_matches_the_line_the_backend_writes() -> None:
+    """One string, two repositories: the filter is held to the backend's message.
+
+    stoa-api logs in Lambda's Text format, which writes the message and drops
+    `extra`, so the backend's `event: voice_transcription_refused` never reaches
+    CloudWatch. The filter matches the message; a reworded message would leave
+    the alarm watching for a line nobody writes.
+    """
+    from stacks.lambda_dist_guard import DEFAULT_BACKEND_ROOT
+    from stacks.monitoring_stack import VOICE_TRANSCRIPTION_REFUSED_MESSAGE
+
+    source = (
+        DEFAULT_BACKEND_ROOT / "src" / "stoa" / "services" / "transcription.py"
+    ).read_text(encoding="utf-8")
+    import re
+
+    # logger.warning("voice transcription %s", "refused" if refused else "failed", ...)
+    [(template, word)] = re.findall(
+        r'logger\.warning\(\s*"(voice transcription %s)",\s*"(refused)" if refused else "failed",',
+        source,
+    )
+    assert VOICE_TRANSCRIPTION_REFUSED_MESSAGE == template % word
+    assert VOICE_TRANSCRIPTION_REFUSED_MESSAGE not in "voice transcription failed"
+    assert source.count('"voice transcription failed"') == 1  # the BotoCoreError path
 
 
 def test_the_owner_registry_is_swept_daily_on_the_deletion_function(
