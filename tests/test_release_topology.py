@@ -591,6 +591,11 @@ def test_functions_that_invoke_a_model_may_also_count_its_tokens(
     invoking = []
     for policy in _named_resources(template, "AWS::IAM::Policy").values():
         for statement in _statements(policy):
+            # Voice transcription is one Converse call to Voxtral, which has no
+            # token counting and is never streamed; its grant is pinned on its
+            # own below.
+            if statement.get("Sid") == "TranscribeVoiceQuestions":
+                continue
             actions = statement.get("Action")
             actions = actions if isinstance(actions, list) else [actions]
             if "bedrock:InvokeModel" in actions:
@@ -1056,6 +1061,43 @@ def test_the_worker_can_stream_from_the_model_and_use_the_table(
     }
     assert {"dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"} <= actions
     assert "s3:GetObject*" in actions
+
+
+VOXTRAL_ARN = "arn:aws:bedrock:eu-west-1::foundation-model/mistral.voxtral-small-24b-2507"
+
+
+def test_only_the_api_may_transcribe_with_voxtral_in_ireland(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoa-infra#28: the API role may call Converse on Voxtral Small in eu-west-1.
+
+    Converse is authorised as bedrock:InvokeModel. The grant names one model in
+    one Region: no wildcard, no inference profile (Voxtral has none), and no
+    other function role holds it.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    _, api = _resource_by_property(template, "AWS::Lambda::Function", "FunctionName", "stoa-api")
+
+    transcription = [
+        statement
+        for statement in _statements_for_function_role(template, api)
+        if statement.get("Sid") == "TranscribeVoiceQuestions"
+    ]
+    assert transcription == [
+        {
+            "Sid": "TranscribeVoiceQuestions",
+            "Effect": "Allow",
+            "Action": "bedrock:InvokeModel",
+            "Resource": VOXTRAL_ARN,
+        }
+    ]
+
+    mentioning_voxtral = [
+        function["Properties"].get("FunctionName")
+        for function in _named_resources(template, "AWS::Lambda::Function").values()
+        if "voxtral" in json.dumps(_statements_for_function_role(template, function))
+    ]
+    assert mentioning_voxtral == ["stoa-api"]
 
 
 def test_the_deploy_role_can_update_the_worker(monkeypatch: Any, tmp_path: Path) -> None:

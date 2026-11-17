@@ -37,6 +37,14 @@ BEDROCK_MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
 # offered in Zurich (ADR-010). Must match stoa-backend's image_moderation_region.
 IMAGE_MODERATION_REGION = "eu-central-1"
 
+# Voice questions are transcribed by Voxtral Small in Ireland, called in-Region
+# with the plain model id: Zurich has no model that accepts audio, and Voxtral
+# has no geo or global inference profile, so there is no profile ARN to grant
+# (stoa-backend#469, stoa-infra#28). Must match the backend's transcription
+# model and region.
+TRANSCRIPTION_MODEL_ID = "mistral.voxtral-small-24b-2507"
+TRANSCRIPTION_REGION = "eu-west-1"
+
 # The browser origins that load the frontend against this API: production and
 # the redesign preview. Exact origins, never `*`, which answered every origin
 # and cannot be combined with credentials. stoa-backend's
@@ -522,6 +530,17 @@ class ApiStack(Stack):
                 "bedrock:CountTokens",
             ],
             resources=["*"],
+        ))
+        # Voice-question transcription (stoa-backend#477) calls Converse, which
+        # is authorised as bedrock:InvokeModel. One model in one Region: no
+        # streaming, and no CountTokens, which Voxtral does not support.
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            sid="TranscribeVoiceQuestions",
+            actions=["bedrock:InvokeModel"],
+            resources=[
+                f"arn:aws:bedrock:{TRANSCRIPTION_REGION}::foundation-model/"
+                f"{TRANSCRIPTION_MODEL_ID}",
+            ],
         ))
         self.weekly_report_function.add_to_role_policy(iam.PolicyStatement(
             actions=[
