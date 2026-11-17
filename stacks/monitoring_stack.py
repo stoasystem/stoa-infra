@@ -39,6 +39,14 @@ OWNER_REGISTRY_SWEEP_EVENTS = (
     "owner_registry_sweep_incomplete",
     "owner_registry_sweep_marker_failed",
 )
+# The line stoa-api writes when Bedrock refuses a voice recording as invalid
+# (stoasystem/stoa-backend `src/stoa/services/transcription.py`:
+# `logger.warning("voice transcription %s", "refused" ...)`). The function logs
+# in Lambda's Text format, which writes the message and drops `extra`, so the
+# `event: voice_transcription_refused` the backend attaches never reaches
+# CloudWatch; the message is what there is to match. Every other transcription
+# failure writes "voice transcription failed". A test reads the backend checkout.
+VOICE_TRANSCRIPTION_REFUSED_MESSAGE = "voice transcription refused"
 
 
 class MonitoringStack(Stack):
@@ -218,6 +226,39 @@ class MonitoringStack(Stack):
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
             )
             sweep_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        # stoasystem/stoa-backend#478, stoa-infra#28: Bedrock refusing a voice
+        # recording as invalid - the model not taking audio in this region, or
+        # not this container. Voxtral has been reported refusing audio in one
+        # region; if it happens here every voice question fails and the student
+        # sees only "temporarily unavailable". Normally zero, so one refusal
+        # pages: low volume, and the first one is the one worth knowing about.
+        refused = logs.MetricFilter(
+            self,
+            "VoiceTranscriptionRefusedFilter",
+            log_group=logs.LogGroup.from_log_group_name(
+                self,
+                "ApiLogs",
+                f"/aws/lambda/{api_function.function_name}",
+            ),
+            metric_namespace="Stoa/VoiceQuestions",
+            metric_name="TranscriptionRefused",
+            filter_pattern=logs.FilterPattern.literal(
+                f'"{VOICE_TRANSCRIPTION_REFUSED_MESSAGE}"'
+            ),
+            metric_value="1",
+        )
+        refused_alarm = cw.Alarm(
+            self,
+            "VoiceTranscriptionRefusedAlarm",
+            alarm_name="stoa-voice-transcription-refused",
+            metric=refused.metric(statistic="Sum", period=Duration.minutes(5)),
+            threshold=1,
+            evaluation_periods=1,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+        )
+        refused_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
         # Dashboard
         dashboard = cw.Dashboard(self, "StoaDashboard", dashboard_name="STOA-Overview")
