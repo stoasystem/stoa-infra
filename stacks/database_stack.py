@@ -90,3 +90,20 @@ class DatabaseStack(Stack):
             sort_key=dynamodb.Attribute(name="sweep_due_at", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
+
+        # GSI-TopicShelf: one topic's curriculum units, lessons or exercises
+        # (stoasystem/stoa-backend#513). Their rows are keyed by their own id, with
+        # no topic in the key, so without it the roadmap, the lesson page and the
+        # learning memory read every lesson or exercise to find one topic's.
+        # Sparse by design: only curriculum unit, lesson and exercise rows carry
+        # `topic_shelf` (`UNIT#<topic>`, `LESSON#<topic>`, `CHALLENGE#<topic>`);
+        # `topic_order` sorts a topic's exercises by lesson, then by their order.
+        # Not keyed on `topic_id`: progress and other rows carry it too.
+        self.table.add_global_secondary_index(
+            index_name="GSI-TopicShelf",
+            partition_key=dynamodb.Attribute(
+                name="topic_shelf", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(name="topic_order", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
