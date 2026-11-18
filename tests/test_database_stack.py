@@ -1,0 +1,45 @@
+"""CDK contracts for the stoa-main table's indexes."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import aws_cdk as cdk
+from aws_cdk.assertions import Template
+
+from stacks.database_stack import DatabaseStack
+
+
+def _table() -> dict[str, Any]:
+    app = cdk.App()
+    stack = DatabaseStack(
+        app,
+        "TestDatabase",
+        env=cdk.Environment(account="111122223333", region="eu-central-2"),
+    )
+    template = Template.from_stack(stack).to_json()
+    tables = [
+        resource
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::DynamoDB::Table"
+    ]
+    assert len(tables) == 1
+    return tables[0]["Properties"]
+
+
+def test_sweep_pending_index_is_keyed_by_bucket_and_due_time() -> None:
+    """The generation sweep queries waiting commands through it (stoa-backend#502)."""
+    table = _table()
+    indexes = {index["IndexName"]: index for index in table["GlobalSecondaryIndexes"]}
+    sweep = indexes["GSI-SweepPending"]
+    assert sweep["KeySchema"] == [
+        {"AttributeName": "sweep_bucket", "KeyType": "HASH"},
+        {"AttributeName": "sweep_due_at", "KeyType": "RANGE"},
+    ]
+    assert sweep["Projection"] == {"ProjectionType": "ALL"}
+    types = {
+        attribute["AttributeName"]: attribute["AttributeType"]
+        for attribute in table["AttributeDefinitions"]
+    }
+    assert types["sweep_bucket"] == "S"
+    assert types["sweep_due_at"] == "S"
