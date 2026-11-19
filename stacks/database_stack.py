@@ -1,4 +1,4 @@
-"""DynamoDB single-table design with 4 GSIs."""
+"""DynamoDB single-table design with its GSIs."""
 from aws_cdk import (
     Stack,
     RemovalPolicy,
@@ -73,5 +73,20 @@ class DatabaseStack(Stack):
                 name="review_state", type=dynamodb.AttributeType.STRING
             ),
             sort_key=dynamodb.Attribute(name="created_at", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+        # GSI-SweepPending: message commands the conversation generation sweep may
+        # act on, oldest due first (stoasystem/stoa-backend#502). Sparse by design:
+        # only a command in a state the sweep acts on carries `sweep_bucket`, and
+        # every transition out of those states removes it, so the sweep reads the
+        # waiting commands rather than the whole table. `sweep_due_at` is when the
+        # sweep should next look at the command.
+        self.table.add_global_secondary_index(
+            index_name="GSI-SweepPending",
+            partition_key=dynamodb.Attribute(
+                name="sweep_bucket", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(name="sweep_due_at", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
