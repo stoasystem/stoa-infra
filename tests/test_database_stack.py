@@ -43,3 +43,21 @@ def test_sweep_pending_index_is_keyed_by_bucket_and_due_time() -> None:
     }
     assert types["sweep_bucket"] == "S"
     assert types["sweep_due_at"] == "S"
+
+
+def test_topic_shelf_index_is_keyed_by_shelf_and_order() -> None:
+    """The curriculum reads find one topic's rows through it (stoa-backend#513)."""
+    table = _table()
+    indexes = {index["IndexName"]: index for index in table["GlobalSecondaryIndexes"]}
+    shelf = indexes["GSI-TopicShelf"]
+    assert shelf["KeySchema"] == [
+        {"AttributeName": "topic_shelf", "KeyType": "HASH"},
+        {"AttributeName": "topic_order", "KeyType": "RANGE"},
+    ]
+    assert shelf["Projection"] == {"ProjectionType": "ALL"}
+    types = {
+        attribute["AttributeName"]: attribute["AttributeType"]
+        for attribute in table["AttributeDefinitions"]
+    }
+    assert types["topic_shelf"] == "S"
+    assert types["topic_order"] == "S"
