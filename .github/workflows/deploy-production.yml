@@ -1,7 +1,6 @@
 name: Deploy Infrastructure to Production
 
-# Direct production delivery for pushes to main. deploy.yml stays the
-# credential-free formal verification DAG and must not mutate stacks.
+# Direct production delivery for pushes to main, and the only workflow here.
 # Sandbox stacks are synthesized by the app but are never named here.
 
 on:
@@ -101,8 +100,7 @@ jobs:
           .venv/bin/python -c 'from stacks.lambda_dist_guard import verify_lambda_dist; verify_lambda_dist()'
 
       # The only job a push to main runs, so the only place these tests can stop
-      # a deploy. deploy.yml runs one of the two files and only when dispatched.
-      # Before the credentials on purpose: the tests must not reach AWS.
+      # a deploy. Before the credentials on purpose: the tests must not reach AWS.
       - name: Run infra tests
         working-directory: stoa-infra
         run: uv run --frozen pytest -q tests/
