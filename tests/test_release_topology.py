@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import runpy
 from pathlib import Path
 from typing import Any
@@ -1175,6 +1176,93 @@ def test_every_function_answers_with_the_one_model(monkeypatch: Any, tmp_path: P
 
     source = (Path(__file__).resolve().parents[1] / "stacks" / "api_stack.py").read_text()
     assert source.count(next(iter(models.values()))) == 1
+
+
+def test_the_model_has_a_product_and_a_development_profile_told_apart_by_a_tag(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """stoasystem/stoa-backend#612: the Bedrock bill splits by the `BedrockUse` tag.
+
+    Only an application inference profile can carry a tag, so there is one per
+    use. Both copy the EU cross-Region profile the functions already answered
+    with: same model, same Regions, same price.
+    """
+    template = _api_template(monkeypatch, tmp_path)
+    profiles = _named_resources(template, "AWS::Bedrock::ApplicationInferenceProfile")
+
+    by_use = {}
+    for profile in profiles.values():
+        properties = profile["Properties"]
+        tags = {tag["Key"]: tag["Value"] for tag in properties["Tags"]}
+        by_use[tags["BedrockUse"]] = properties
+        assert properties["ModelSource"] == {
+            "CopyFrom": (
+                f"arn:aws:bedrock:{REGION}:{ACCOUNT}:inference-profile/"
+                "eu.anthropic.claude-sonnet-4-6"
+            )
+        }
+        # What Bedrock accepts: a name of letters, digits and single hyphens,
+        # at most 64 long; a description without punctuation but `:` and `.`.
+        assert re.fullmatch(r"([0-9a-zA-Z][ _-]?)+", properties["InferenceProfileName"])
+        assert len(properties["InferenceProfileName"]) <= 64
+        assert re.fullmatch(r"([0-9a-zA-Z:.][ _-]?)+", properties["Description"])
+
+    assert set(by_use) == {"product", "development"}
+    # The names the backend's scripts look the development profile up by
+    # (stoa.services.model_call.development_profile.profile_name).
+    assert by_use["product"]["InferenceProfileName"] == (
+        "stoa-product-eu-anthropic-claude-sonnet-4-6"
+    )
+    assert by_use["development"]["InferenceProfileName"] == (
+        "stoa-development-eu-anthropic-claude-sonnet-4-6"
+    )
+
+
+def test_every_function_invokes_the_model_through_the_product_profile(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A function left on the bare model id would be billed without the tag."""
+    template = _api_template(monkeypatch, tmp_path)
+    [product_id] = [
+        logical_id
+        for logical_id, profile in _named_resources(
+            template, "AWS::Bedrock::ApplicationInferenceProfile"
+        ).items()
+        if {"Key": "BedrockUse", "Value": "product"} in profile["Properties"]["Tags"]
+    ]
+    functions = _named_resources(template, "AWS::Lambda::Function").values()
+    with_model = {
+        function["Properties"]["FunctionName"]: function["Properties"]["Environment"]["Variables"]
+        for function in functions
+        if "BEDROCK_MODEL_ID"
+        in function["Properties"].get("Environment", {}).get("Variables", {})
+    }
+
+    assert {"stoa-api", "stoa-weekly-report", WORKER} <= set(with_model)
+    for name, variables in with_model.items():
+        assert variables["BEDROCK_INFERENCE_PROFILE_ARN"] == {
+            "Fn::GetAtt": [product_id, "InferenceProfileArn"]
+        }, name
+        # Tokens are still counted on the model: CountTokens takes no profile.
+        assert variables["BEDROCK_MODEL_ID"] == "eu.anthropic.claude-sonnet-4-6"
+
+    # The role may invoke through the profile: its Bedrock grant is not pinned
+    # to the model's own ARNs.
+    for name in with_model:
+        function = _resource_by_property(
+            template, "AWS::Lambda::Function", "FunctionName", name
+        )[1]
+        streaming = [
+            statement
+            for statement in _statements_for_function_role(template, function)
+            if "bedrock:InvokeModelWithResponseStream"
+            in (
+                statement["Action"]
+                if isinstance(statement["Action"], list)
+                else [statement["Action"]]
+            )
+        ]
+        assert streaming and all(statement["Resource"] == "*" for statement in streaming), name
 
 
 def _monitoring_template(monkeypatch: Any, tmp_path: Path) -> dict[str, Any]:
