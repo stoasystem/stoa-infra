@@ -107,3 +107,18 @@ class DatabaseStack(Stack):
             sort_key=dynamodb.Attribute(name="topic_order", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
+
+        # GSI-Listing: every row of one kind, newest first
+        # (stoasystem/stoa-backend#613). For the lists that are not one person's:
+        # an administrator's view of all the site's notifications had to scan the
+        # whole table to find them. Sparse by design: only a row that belongs in
+        # such a list carries `listing` (the name of the list; for notifications,
+        # `notification_event`), and `listed_at` is when it was created. Not
+        # keyed on `entity_type` and `created_at`: nearly every row carries
+        # those, and the index would be a second copy of the table.
+        self.table.add_global_secondary_index(
+            index_name="GSI-Listing",
+            partition_key=dynamodb.Attribute(name="listing", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="listed_at", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
