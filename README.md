@@ -11,7 +11,7 @@ AWS CDK v2 (Python) infrastructure for the STOA platform.
 | `StoaAuthStack` | Cognito UserPool + 4 App Clients |
 | `StoaDatabaseStack` | DynamoDB single-table + 4 GSIs |
 | `StoaStorageStack` | S3 images + reports + logs buckets |
-| `StoaApiStack` | Lambda (FastAPI/Mangum) + HTTP API + WAF |
+| `StoaApiStack` | Lambda (FastAPI/Mangum) + HTTP API + WAF；Bedrock 的两个 application inference profile（产品 / 开发，标签 `BedrockUse`，账单按它分，stoa-backend#612） |
 | `StoaAiStack` | Bedrock / Rekognition (Phase 2 placeholder) |
 | `StoaNotificationStack` | SQS FIFO + SES + EventBridge Scheduler |
 | `StoaMonitoringStack` | CloudWatch Dashboard + Alarms |

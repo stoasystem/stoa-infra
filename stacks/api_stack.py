@@ -1,12 +1,15 @@
 """API Gateway HTTP API + Lambda (FastAPI/Mangum) + WAF."""
 import json
+import re
 
 from aws_cdk import (
     AssetHashType,
     CfnOutput,
+    CfnTag,
     RemovalPolicy,
     Stack,
     Duration,
+    aws_bedrock as bedrock,
     aws_lambda as lambda_,
     aws_apigatewayv2 as apigwv2,
     aws_apigatewayv2_integrations as integrations,
@@ -32,6 +35,27 @@ from stacks.lambda_environment import (
 # The one model every function answers with. Written once, so the choice of
 # model or inference profile (open decision Q4) is a one-line change.
 BEDROCK_MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
+
+# Bedrock bills by the inference profile a call was invoked through, and only
+# an application inference profile can carry a tag. So the model has two of
+# them, both copies of the EU cross-Region profile above and tagged with what
+# the call is for: the functions invoke through the product one, the scripts
+# developers run (probes, the reply evaluation, lesson drafts) through the
+# development one, which they find by its name. In Cost Explorer the tag
+# splits the Bedrock bill in two once it is activated as a cost allocation tag
+# (stoasystem/stoa-backend#612).
+BEDROCK_USE_TAG = "BedrockUse"
+BEDROCK_USES = ("product", "development")
+
+
+def bedrock_profile_name(use: str, model_id: str) -> str:
+    """The name of the application inference profile of `use` for `model_id`.
+
+    stoa-backend finds the development profile by this name
+    (`stoa.services.model_call.development_profile.profile_name`); the two
+    rules must stay the same.
+    """
+    return f"stoa-{use}-" + re.sub(r"[^0-9A-Za-z]+", "-", model_id).strip("-")
 
 # Where uploaded images are moderated: Frankfurt, because Rekognition is not
 # offered in Zurich (ADR-010). Must match stoa-backend's image_moderation_region.
@@ -108,6 +132,31 @@ class ApiStack(Stack):
             asset_hash_type=AssetHashType.CUSTOM,
         )
 
+        # One application inference profile per use (stoasystem/stoa-backend#612).
+        # Each copies the system-defined EU profile, so it routes to the same
+        # Regions at the same price; it only gives the calls made through it a
+        # tag on the bill and a `ModelId` of their own in CloudWatch.
+        self.bedrock_profiles = {
+            use: bedrock.CfnApplicationInferenceProfile(
+                self,
+                f"Bedrock{use.capitalize()}Profile",
+                inference_profile_name=bedrock_profile_name(use, BEDROCK_MODEL_ID),
+                description=f"STOA {use} calls of {BEDROCK_MODEL_ID}",
+                model_source=bedrock.CfnApplicationInferenceProfile.InferenceProfileModelSourceProperty(
+                    copy_from=(
+                        f"arn:aws:bedrock:{self.region}:{self.account}:"
+                        f"inference-profile/{BEDROCK_MODEL_ID}"
+                    ),
+                ),
+                tags=[CfnTag(key=BEDROCK_USE_TAG, value=use)],
+            )
+            for use in BEDROCK_USES
+        }
+        # What the functions invoke through. The backend reads it as
+        # `bedrock_inference_profile_arn` and keeps counting tokens on
+        # BEDROCK_MODEL_ID, since CountTokens takes a model and not a profile.
+        product_profile_arn = self.bedrock_profiles["product"].attr_inference_profile_arn
+
         # Lambda function — FastAPI via Mangum
         self.api_function = lambda_.Function(
             self,
@@ -159,6 +208,7 @@ class ApiStack(Stack):
                     "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                     "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
                     "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
+                    "BEDROCK_INFERENCE_PROFILE_ARN": product_profile_arn,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                     "APP_BASE_URL": (
                         "https://app.stoaedu.ch" if env_name == "production" else "http://localhost:5173"
@@ -204,6 +254,7 @@ class ApiStack(Stack):
                     "COGNITO_PARENT_CLIENT_ID": parent_client.user_pool_client_id,
                     "COGNITO_STUDENT_CLIENT_ID": student_client.user_pool_client_id,
                     "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
+                    "BEDROCK_INFERENCE_PROFILE_ARN": product_profile_arn,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                 },
                 load_live_lambda_environment(f"{resource_prefix}-weekly-report", env_name=env_name),
@@ -338,6 +389,7 @@ class ApiStack(Stack):
                     "COGNITO_TEACHER_CLIENT_ID": teacher_client.user_pool_client_id,
                     "COGNITO_ADMIN_CLIENT_ID": admin_client.user_pool_client_id,
                     "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
+                    "BEDROCK_INFERENCE_PROFILE_ARN": product_profile_arn,
                     "STRIPE_CHECKOUT_WEB_ORIGINS": checkout_origins_for(env_name),
                     **carried_audit_keys,
                 },
@@ -1095,6 +1147,13 @@ class ApiStack(Stack):
 
         self.api_url = http_api.url
         CfnOutput(self, "ApiUrl", value=http_api.url or "", description="STOA API base URL")
+        for use, profile in self.bedrock_profiles.items():
+            CfnOutput(
+                self,
+                f"Bedrock{use.capitalize()}ProfileArn",
+                value=profile.attr_inference_profile_arn,
+                description=f"Application inference profile of the {use} model calls",
+            )
 
     def _grant_report_artifact_read_write(
         self,
