@@ -201,6 +201,14 @@ class MonitoringStack(Stack):
             # is raised on any line in the last two periods and stays up while
             # the finding does. The event names are the backend's; a test reads
             # them from the backend checkout.
+            #
+            # `default_value=0` is what lets the alarm clear. Without it a clean
+            # day publishes nothing, and CloudWatch, short of real data points,
+            # reaches back over a wider evaluation range and counts every real
+            # one it finds there - so a single finding held the alarm in ALARM
+            # through three clean days (2026-11-21 to 23). With it every period
+            # the function logs in has a real 0, and two clean days read as two
+            # clean days.
             sweep_findings = logs.MetricFilter(
                 self,
                 "OwnerRegistrySweepFindingsFilter",
@@ -213,6 +221,7 @@ class MonitoringStack(Stack):
                 metric_name="OwnerRegistrySweepFindings",
                 filter_pattern=logs.FilterPattern.any_term(*OWNER_REGISTRY_SWEEP_EVENTS),
                 metric_value="1",
+                default_value=0,
             )
             sweep_alarm = cw.Alarm(
                 self,
