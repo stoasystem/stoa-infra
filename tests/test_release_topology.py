@@ -1655,6 +1655,9 @@ def test_an_owner_registry_sweep_finding_pages(monkeypatch: Any, tmp_path: Path)
     assert transformation["MetricName"] == "OwnerRegistrySweepFindings"
     assert transformation["MetricNamespace"] == "Stoa/AccountDeletion"
     assert transformation["MetricValue"] == "1"
+    # A clean day has to publish a real 0, or the alarm keeps counting the last
+    # finding it can reach and does not clear.
+    assert transformation["DefaultValue"] == 0
 
 
 def test_the_sweep_filter_matches_the_lines_the_backend_logs(
