@@ -224,6 +224,10 @@ class ApiStack(Stack):
                     # it falls back to the scan by itself. Deletions already
                     # accepted keep the path they were accepted under.
                     "ACCOUNT_DELETION_REGISTRY_PATH": "true",
+                    # stoasystem/stoa-backend#610, #624 and card 133: one numbers-only
+                    # log line per request with what it read, so each read fix is
+                    # measured on production rather than on a double.
+                    "DYNAMODB_READ_METERING": "true",
                 },
                 load_live_lambda_environment(f"{resource_prefix}-api", env_name=env_name),
                 env_name=env_name,
