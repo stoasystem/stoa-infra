@@ -119,6 +119,7 @@ class ApiStack(Stack):
         images_bucket: s3.Bucket,
         reports_bucket: s3.Bucket,
         immutable_evidence_bucket: s3.Bucket,
+        analytics_table: dynamodb.ITable | None = None,
         env_name: str = "production",
         resource_prefix: str = "stoa",
         **kwargs,
@@ -230,6 +231,29 @@ class ApiStack(Stack):
 
         # Grant permissions
         table.grant_read_write_data(self.api_function)
+
+        # Card 134: usage events go to their own table, and the console's health
+        # pages read CloudWatch metrics, alarms and the request logs.
+        if analytics_table is not None:
+            analytics_table.grant_read_write_data(self.api_function)
+            self.api_function.add_environment("ANALYTICS_TABLE_NAME", analytics_table.table_name)
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "cloudwatch:GetMetricData",
+                "cloudwatch:DescribeAlarms",
+                "cloudwatch:DescribeAlarmHistory",
+                "logs:GetQueryResults",
+                "logs:StopQuery",
+            ],
+            resources=["*"],
+        ))
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["logs:StartQuery"],
+            resources=[
+                f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/lambda/{resource_prefix}-api:*",
+                f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/apigateway/{resource_prefix}-api/access:*",
+            ],
+        ))
         images_bucket.grant_read_write(self.api_function)
         self._grant_report_artifact_read_write(reports_bucket, self.api_function)
         self._grant_immutable_evidence_access(immutable_evidence_bucket, self.api_function)
@@ -1071,6 +1095,10 @@ class ApiStack(Stack):
             ("/auth/logout", [apigwv2.HttpMethod.POST]),
             ("/auth/invitations/claim", [apigwv2.HttpMethod.POST]),
             ("/analytics/events", [apigwv2.HttpMethod.POST]),
+            # Card 134: the error boundary reports a crash whether or not anyone
+            # is signed in. The handler keeps only route, a hashed message and a
+            # trimmed stack, and caps reports per source address.
+            ("/monitoring/frontend-errors", [apigwv2.HttpMethod.POST]),
             # Teacher onboarding reaches these before the candidate has any identity.
             # GET /teacher-applications is the reviewer queue and stays behind the
             # authorizer: granting it here would publish every pending candidacy.

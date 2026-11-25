@@ -14,6 +14,7 @@ class DatabaseStack(Stack):
         scope: Construct,
         construct_id: str,
         table_name: str = "stoa-main",
+        analytics_table_name: str = "stoa-analytics",
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -121,4 +122,18 @@ class DatabaseStack(Stack):
             partition_key=dynamodb.Attribute(name="listing", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="listed_at", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+        # stoa-analytics: usage events, active-day marks and probe results
+        # (card 134). Kept out of stoa-main so telemetry never grows the table
+        # every other read pays for. Rows expire through `ttl`.
+        self.analytics_table = dynamodb.Table(
+            self,
+            "StoaAnalyticsTable",
+            table_name=analytics_table_name,
+            partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            time_to_live_attribute="ttl",
+            removal_policy=RemovalPolicy.RETAIN,
         )

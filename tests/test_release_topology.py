@@ -703,6 +703,8 @@ PUBLIC_ROUTE_KEYS = {
     "POST /auth/register",
     "POST /auth/reset-password",
     "POST /billing/webhooks/stripe",
+    # The error boundary reports whether or not anyone is signed in (card 134).
+    "POST /monitoring/frontend-errors",
     # The signed token in the query is the credential (stoa-backend#363).
     "POST /notifications/email-resubscribe",
     "POST /notifications/email-unsubscribe",
@@ -1386,6 +1388,7 @@ def test_app_py_wires_each_alarm_to_the_production_resource(
         )
         for alarm in _named_resources(monitoring, "AWS::CloudWatch::Alarm").values()
         if alarm["Properties"].get("Dimensions")
+        and not alarm["Properties"]["AlarmName"].startswith("stoa-feature-")
     }
     lambda_, queue = "AWS::Lambda::Function", "AWS::SQS::Queue"
     assert targets == {
@@ -1848,3 +1851,32 @@ def test_the_images_bucket_cleans_what_uploads_leave_and_keeps_old_attachments()
     assert all(rule["Status"] == "Enabled" for rule in rules.values())
     noncurrent = [rule for rule in rules.values() if "NoncurrentVersionExpiration" in rule]
     assert [rule.get("Prefix") for rule in noncurrent] == ["staging/"]
+
+
+def test_each_feature_pages_on_error_rate_and_latency(monkeypatch: Any, tmp_path: Path) -> None:
+    """Card 134: the console's health page reads these back by name prefix."""
+    from stacks.monitoring_stack import FEATURE_P95_LIMIT_MS
+
+    template = _monitoring_template(monkeypatch, tmp_path)
+    alarms = _alarms(template)
+    for feature, limit in FEATURE_P95_LIMIT_MS.items():
+        latency = alarms[f"stoa-feature-{feature}-latency"]
+        assert latency["Namespace"] == "Stoa/Features"
+        assert latency["Dimensions"] == [{"Name": "Feature", "Value": feature}]
+        assert latency["ExtendedStatistic"] == "p95"
+        assert latency["Threshold"] == limit
+        rate = alarms[f"stoa-feature-{feature}-error-rate"]
+        assert rate["Threshold"] == 2
+        assert rate["TreatMissingData"] == "notBreaching"
+        assert any("requests >= 20" in str(m.get("Expression", "")) for m in rate["Metrics"])
+
+
+def test_budget_mails_stoa_alerts(monkeypatch: Any, tmp_path: Path) -> None:
+    template = _monitoring_template(monkeypatch, tmp_path)
+    [budget] = _named_resources(template, "AWS::Budgets::Budget").values()
+    kinds = {
+        entry["Notification"]["NotificationType"]
+        for entry in budget["Properties"]["NotificationsWithSubscribers"]
+    }
+    assert kinds == {"ACTUAL", "FORECASTED"}
+

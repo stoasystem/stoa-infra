@@ -5,8 +5,10 @@ from aws_cdk import (
     Stack,
     Duration,
     aws_apigatewayv2 as apigwv2,
+    aws_budgets as budgets,
     aws_cloudwatch as cw,
     aws_cloudwatch_actions as cw_actions,
+    aws_iam as iam,
     aws_lambda as lambda_,
     aws_logs as logs,
     aws_sns as sns,
@@ -32,6 +34,26 @@ from constructs import Construct
 # that ConfirmationWasAuthenticated is "true". CloudFormation has no property
 # for this, so it is lost whenever the subscription is replaced.
 ALERT_EMAIL_PARAMETER = "/stoa/alerts/email"
+
+# Card 134: the backend's request middleware publishes Requests, Errors5xx and
+# Latency per feature under this namespace, with `Feature` as the only
+# dimension. The keys are stoa-backend's `stoa/observability/features.py`.
+# The console's health page reads these alarms back by the
+# `stoa-feature-<key>-` prefix, so the names are part of that contract.
+FEATURE_METRICS_NAMESPACE = "Stoa/Features"
+FEATURE_P95_LIMIT_MS = {
+    "auth": 1_500,
+    "practice": 1_500,
+    "ask_ai": 20_000,
+    "teacher_help": 1_500,
+    "voice": 15_000,
+    "notifications": 1_000,
+    "parent_reports": 3_000,
+    "admin": 5_000,
+}
+FEATURE_ERROR_RATE_PERCENT = 2
+FEATURE_MIN_REQUESTS = 20
+MONTHLY_BUDGET_USD = 60
 # What the backend's daily owner registry sweep logs when it has something to
 # say (stoasystem/stoa-backend `src/stoa/jobs/owner_registry_sweep.py`).
 OWNER_REGISTRY_SWEEP_EVENTS = (
@@ -102,6 +124,11 @@ class MonitoringStack(Stack):
             comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
         )
         latency_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        for feature, p95_limit_ms in FEATURE_P95_LIMIT_MS.items():
+            self._page_on_feature(feature, p95_limit_ms)
+
+        self._page_on_budget(alerts_topic)
 
         # Every job fails where nobody is watching, so any failed invocation
         # pages. #18's worker: a failure is a student waiting on an answer
@@ -319,6 +346,92 @@ class MonitoringStack(Stack):
                     width=12,
                 ),
             )
+
+    def _page_on_feature(self, feature: str, p95_limit_ms: int) -> None:
+        """Two alarms per feature: share of 5xx, and p95 latency over its limit."""
+
+        def metric(name: str, statistic: str) -> cw.Metric:
+            return cw.Metric(
+                namespace=FEATURE_METRICS_NAMESPACE,
+                metric_name=name,
+                dimensions_map={"Feature": feature},
+                statistic=statistic,
+                period=Duration.minutes(5),
+            )
+
+        # Too few requests make one failure look like an outage, so the rate
+        # only counts once a window has FEATURE_MIN_REQUESTS of them.
+        error_rate = cw.MathExpression(
+            expression=f"IF(requests >= {FEATURE_MIN_REQUESTS}, 100 * errors / requests, 0)",
+            using_metrics={
+                "requests": metric("Requests", "Sum"),
+                "errors": metric("Errors5xx", "Sum"),
+            },
+            period=Duration.minutes(5),
+            label=f"{feature} 5xx %",
+        )
+        errors = cw.Alarm(
+            self,
+            f"Feature{feature.title().replace('_', '')}ErrorRate",
+            alarm_name=f"stoa-feature-{feature}-error-rate",
+            alarm_description=f"{feature}: more than {FEATURE_ERROR_RATE_PERCENT}% of requests answered 5xx",
+            metric=error_rate,
+            threshold=FEATURE_ERROR_RATE_PERCENT,
+            evaluation_periods=2,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+        )
+        errors.add_alarm_action(cw_actions.SnsAction(self._alerts_topic))
+        errors.add_ok_action(cw_actions.SnsAction(self._alerts_topic))
+
+        latency = cw.Alarm(
+            self,
+            f"Feature{feature.title().replace('_', '')}Latency",
+            alarm_name=f"stoa-feature-{feature}-latency",
+            alarm_description=f"{feature}: p95 latency above {p95_limit_ms} ms for 15 minutes",
+            metric=metric("Latency", "p95"),
+            threshold=p95_limit_ms,
+            evaluation_periods=3,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+        )
+        latency.add_alarm_action(cw_actions.SnsAction(self._alerts_topic))
+        latency.add_ok_action(cw_actions.SnsAction(self._alerts_topic))
+
+    def _page_on_budget(self, alerts_topic: sns.Topic) -> None:
+        """Mail stoa-alerts at 80% of the month's budget spent and at 100% forecast."""
+        alerts_topic.add_to_resource_policy(iam.PolicyStatement(
+            actions=["sns:Publish"],
+            principals=[iam.ServicePrincipal("budgets.amazonaws.com")],
+            resources=[alerts_topic.topic_arn],
+        ))
+        subscriber = budgets.CfnBudget.SubscriberProperty(
+            subscription_type="SNS", address=alerts_topic.topic_arn
+        )
+        budgets.CfnBudget(
+            self,
+            "MonthlyBudget",
+            budget=budgets.CfnBudget.BudgetDataProperty(
+                budget_name="stoa-monthly",
+                budget_type="COST",
+                time_unit="MONTHLY",
+                budget_limit=budgets.CfnBudget.SpendProperty(
+                    amount=MONTHLY_BUDGET_USD, unit="USD"
+                ),
+            ),
+            notifications_with_subscribers=[
+                budgets.CfnBudget.NotificationWithSubscribersProperty(
+                    notification=budgets.CfnBudget.NotificationProperty(
+                        notification_type=kind,
+                        comparison_operator="GREATER_THAN",
+                        threshold=threshold,
+                        threshold_type="PERCENTAGE",
+                    ),
+                    subscribers=[subscriber],
+                )
+                for kind, threshold in (("ACTUAL", 80), ("FORECASTED", 100))
+            ],
+        )
 
     def _page_on_errors(self, job: str, function: lambda_.IFunction) -> None:
         alarm = cw.Alarm(

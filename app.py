@@ -52,6 +52,7 @@ api = ApiStack(
     teacher_client=auth.teacher_client,
     admin_client=auth.admin_client,
     table=database.table,
+    analytics_table=database.analytics_table,
     images_bucket=storage.images_bucket,
     reports_bucket=storage.reports_bucket,
     immutable_evidence_bucket=storage.immutable_evidence_bucket,
