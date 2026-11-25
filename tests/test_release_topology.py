@@ -1930,6 +1930,8 @@ def test_card_134_jobs_run_on_the_ops_function_without_retries(monkeypatch: Any,
         assert json.loads(target["Input"])["job"] == job
         assert target["RetryPolicy"]["MaximumRetryAttempts"] == 0
         assert "DeadLetterConfig" not in target
+    assert schedules["stoa-analytics-rollup"]["State"] == "ENABLED"
+    assert schedules["stoa-synthetic-probe"]["State"] == "DISABLED"
     functions = {
         resource["Properties"].get("FunctionName"): resource["Properties"]
         for resource in api["Resources"].values()

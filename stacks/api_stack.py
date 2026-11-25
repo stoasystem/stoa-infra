@@ -106,6 +106,10 @@ UPLOAD_CODE_ROUTE_THROTTLE = {"ThrottlingRateLimit": 5, "ThrottlingBurstLimit": 
 LOG_RETENTION = logs.RetentionDays.THREE_MONTHS
 
 
+# Card 134: ENABLED once the probe account signs in with the secret's password.
+PROBE_SCHEDULE_STATE = "DISABLED"
+
+
 class ApiStack(Stack):
     def __init__(
         self,
@@ -879,13 +883,14 @@ class ApiStack(Stack):
             self.account_deletion_function.add_environment(
                 "STOA_PROBE_PASSWORD", self.probe_password_secret.secret_value.unsafe_unwrap()
             )
-            for schedule_id, name, description, expression, job in (
+            for schedule_id, name, description, expression, job, state in (
                 (
                     "AnalyticsRollupSchedule",
                     "analytics-rollup",
                     "Fold yesterday's usage events into rollup rows.",
                     "cron(15 1 * * ? *)",
                     "analytics_rollup",
+                    "ENABLED",
                 ),
                 (
                     "SyntheticProbeSchedule",
@@ -893,6 +898,10 @@ class ApiStack(Stack):
                     "Walk the read-only paths signed in as the probe account.",
                     "rate(5 minutes)",
                     "synthetic_probe",
+                    # Paused until probe@test.stoaedu.ch exists with the secret's
+                    # password: until then every run is a failed sign-in, which
+                    # the health page reads as sign-in being down.
+                    PROBE_SCHEDULE_STATE,
                 ),
             ):
                 # No retries and no DLQ: a missed run is replaced by the next one, and
@@ -904,6 +913,7 @@ class ApiStack(Stack):
                     group_name=f"{resource_prefix}-schedules",
                     description=description,
                     schedule_expression=expression,
+                    state=state,
                     flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
                         mode="OFF",
                     ),
