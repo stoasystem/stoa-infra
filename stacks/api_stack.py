@@ -271,6 +271,11 @@ class ApiStack(Stack):
             ],
             resources=["*"],
         ))
+        # Card 134: the usage page divides the month's bill by its active users.
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["ce:GetCostAndUsage"],
+            resources=["*"],
+        ))
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["lambda:ListVersionsByFunction"],
             resources=[f"arn:aws:lambda:{self.region}:{self.account}:function:{resource_prefix}-api"],
