@@ -5,7 +5,6 @@ from aws_cdk import (
     Stack,
     Duration,
     aws_apigatewayv2 as apigwv2,
-    aws_budgets as budgets,
     aws_cloudwatch as cw,
     aws_cloudwatch_actions as cw_actions,
     aws_iam as iam,
@@ -53,7 +52,6 @@ FEATURE_P95_LIMIT_MS = {
 }
 FEATURE_ERROR_RATE_PERCENT = 2
 FEATURE_MIN_REQUESTS = 20
-MONTHLY_BUDGET_USD = 60
 # What the backend's daily owner registry sweep logs when it has something to
 # say (stoasystem/stoa-backend `src/stoa/jobs/owner_registry_sweep.py`).
 OWNER_REGISTRY_SWEEP_EVENTS = (
@@ -399,39 +397,17 @@ class MonitoringStack(Stack):
         latency.add_ok_action(cw_actions.SnsAction(self._alerts_topic))
 
     def _page_on_budget(self, alerts_topic: sns.Topic) -> None:
-        """Mail stoa-alerts at 80% of the month's budget spent and at 100% forecast."""
+        """Let AWS Budgets mail stoa-alerts.
+
+        The budget itself is not here: CloudFormation in eu-central-2 does not know
+        `AWS::Budgets::Budget` (the first deploy of card 134 failed on it). It is
+        made once through the Budgets API, which is global; see stoa-docs 任务卡 134.
+        """
         alerts_topic.add_to_resource_policy(iam.PolicyStatement(
             actions=["sns:Publish"],
             principals=[iam.ServicePrincipal("budgets.amazonaws.com")],
             resources=[alerts_topic.topic_arn],
         ))
-        subscriber = budgets.CfnBudget.SubscriberProperty(
-            subscription_type="SNS", address=alerts_topic.topic_arn
-        )
-        budgets.CfnBudget(
-            self,
-            "MonthlyBudget",
-            budget=budgets.CfnBudget.BudgetDataProperty(
-                budget_name="stoa-monthly",
-                budget_type="COST",
-                time_unit="MONTHLY",
-                budget_limit=budgets.CfnBudget.SpendProperty(
-                    amount=MONTHLY_BUDGET_USD, unit="USD"
-                ),
-            ),
-            notifications_with_subscribers=[
-                budgets.CfnBudget.NotificationWithSubscribersProperty(
-                    notification=budgets.CfnBudget.NotificationProperty(
-                        notification_type=kind,
-                        comparison_operator="GREATER_THAN",
-                        threshold=threshold,
-                        threshold_type="PERCENTAGE",
-                    ),
-                    subscribers=[subscriber],
-                )
-                for kind, threshold in (("ACTUAL", 80), ("FORECASTED", 100))
-            ],
-        )
 
     def _page_on_errors(self, job: str, function: lambda_.IFunction) -> None:
         alarm = cw.Alarm(

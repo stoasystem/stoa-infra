@@ -1871,15 +1871,14 @@ def test_each_feature_pages_on_error_rate_and_latency(monkeypatch: Any, tmp_path
         assert any("requests >= 20" in str(m.get("Expression", "")) for m in rate["Metrics"])
 
 
-def test_budget_mails_stoa_alerts(monkeypatch: Any, tmp_path: Path) -> None:
+def test_budgets_may_mail_stoa_alerts_and_no_budget_resource_is_declared(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """eu-central-2's CloudFormation rejects AWS::Budgets::Budget; the budget lives outside."""
     template = _monitoring_template(monkeypatch, tmp_path)
-    [budget] = _named_resources(template, "AWS::Budgets::Budget").values()
-    kinds = {
-        entry["Notification"]["NotificationType"]
-        for entry in budget["Properties"]["NotificationsWithSubscribers"]
-    }
-    assert kinds == {"ACTUAL", "FORECASTED"}
-
+    assert not _named_resources(template, "AWS::Budgets::Budget")
+    [policy] = _named_resources(template, "AWS::SNS::TopicPolicy").values()
+    assert "budgets.amazonaws.com" in json.dumps(policy)
 
 
 def test_pseudonym_key_is_a_dynamic_reference_not_a_value(monkeypatch: Any, tmp_path: Path) -> None:
