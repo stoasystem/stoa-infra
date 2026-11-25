@@ -487,6 +487,12 @@ class ApiStack(Stack):
         )
 
         table.grant_read_write_data(self.conversation_generation_function)
+        # Card 134: the worker records `ai_answered` when a reply completes.
+        if analytics_table is not None:
+            analytics_table.grant_read_write_data(self.conversation_generation_function)
+            self.conversation_generation_function.add_environment(
+                "ANALYTICS_TABLE_NAME", analytics_table.table_name
+            )
         # Reads the attachment text the request already extracted; never writes.
         images_bucket.grant_read(self.conversation_generation_function)
         # The name E21's switch reads (E22). Adding it publishes a new API
