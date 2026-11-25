@@ -1880,3 +1880,28 @@ def test_budget_mails_stoa_alerts(monkeypatch: Any, tmp_path: Path) -> None:
     }
     assert kinds == {"ACTUAL", "FORECASTED"}
 
+
+
+def test_pseudonym_key_is_a_dynamic_reference_not_a_value(monkeypatch: Any, tmp_path: Path) -> None:
+    """Card 134: the API template must not carry the analytics pseudonym key itself."""
+    dist_dir = tmp_path / "lambda-dist"
+    dist_dir.mkdir()
+    monkeypatch.setattr(
+        "stacks.api_stack.verify_lambda_dist",
+        lambda: LambdaDistAsset(path=dist_dir, asset_hash="0" * 64),
+    )
+    monkeypatch.delenv("STOA_LIVE_LAMBDA_ENV_FILE", raising=False)
+    monkeypatch.delenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", raising=False)
+    app_globals = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "app.py"), run_name="__main__"
+    )
+    out_dir = Path(app_globals["app"].synth().directory)
+    api = json.loads((out_dir / "StoaApiStack.template.json").read_text())
+    functions = {
+        resource["Properties"].get("FunctionName"): resource["Properties"]
+        for resource in api["Resources"].values()
+        if resource["Type"] == "AWS::Lambda::Function"
+    }
+    for name in ("stoa-api", WORKER):
+        value = functions[name]["Environment"]["Variables"]["ANALYTICS_PSEUDONYM_KEY"]
+        assert "resolve:secretsmanager" in json.dumps(value), name

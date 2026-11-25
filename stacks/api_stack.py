@@ -21,6 +21,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_logs as logs,
     aws_scheduler as scheduler,
+    aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
 
@@ -237,6 +238,21 @@ class ApiStack(Stack):
         if analytics_table is not None:
             analytics_table.grant_read_write_data(self.api_function)
             self.api_function.add_environment("ANALYTICS_TABLE_NAME", analytics_table.table_name)
+            # The key that turns a user id into the pseudonym stored with usage
+            # events. The template holds a dynamic reference, never the value.
+            self.analytics_pseudonym_secret = secretsmanager.Secret(
+                self,
+                "AnalyticsPseudonymKey",
+                secret_name=f"{resource_prefix}/analytics/pseudonym-key",
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    password_length=64, exclude_punctuation=True
+                ),
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            self.api_function.add_environment(
+                "ANALYTICS_PSEUDONYM_KEY",
+                self.analytics_pseudonym_secret.secret_value.unsafe_unwrap(),
+            )
         self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "cloudwatch:GetMetricData",
@@ -492,6 +508,10 @@ class ApiStack(Stack):
             analytics_table.grant_read_write_data(self.conversation_generation_function)
             self.conversation_generation_function.add_environment(
                 "ANALYTICS_TABLE_NAME", analytics_table.table_name
+            )
+            self.conversation_generation_function.add_environment(
+                "ANALYTICS_PSEUDONYM_KEY",
+                self.analytics_pseudonym_secret.secret_value.unsafe_unwrap(),
             )
         # Reads the attachment text the request already extracted; never writes.
         images_bucket.grant_read(self.conversation_generation_function)
