@@ -1905,3 +1905,37 @@ def test_pseudonym_key_is_a_dynamic_reference_not_a_value(monkeypatch: Any, tmp_
     for name in ("stoa-api", WORKER):
         value = functions[name]["Environment"]["Variables"]["ANALYTICS_PSEUDONYM_KEY"]
         assert "resolve:secretsmanager" in json.dumps(value), name
+
+
+def test_card_134_jobs_run_on_the_ops_function_without_retries(monkeypatch: Any, tmp_path: Path) -> None:
+    dist_dir = tmp_path / "lambda-dist"
+    dist_dir.mkdir()
+    monkeypatch.setattr(
+        "stacks.api_stack.verify_lambda_dist",
+        lambda: LambdaDistAsset(path=dist_dir, asset_hash="0" * 64),
+    )
+    monkeypatch.delenv("STOA_LIVE_LAMBDA_ENV_FILE", raising=False)
+    monkeypatch.delenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", raising=False)
+    app_globals = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "app.py"), run_name="__main__"
+    )
+    out_dir = Path(app_globals["app"].synth().directory)
+    api = json.loads((out_dir / "StoaApiStack.template.json").read_text())
+    schedules = {
+        resource["Properties"]["Name"]: resource["Properties"]
+        for resource in api["Resources"].values()
+        if resource["Type"] == "AWS::Scheduler::Schedule"
+    }
+    for name, job in (("stoa-analytics-rollup", "analytics_rollup"), ("stoa-synthetic-probe", "synthetic_probe")):
+        target = schedules[name]["Target"]
+        assert json.loads(target["Input"])["job"] == job
+        assert target["RetryPolicy"]["MaximumRetryAttempts"] == 0
+        assert "DeadLetterConfig" not in target
+    functions = {
+        resource["Properties"].get("FunctionName"): resource["Properties"]
+        for resource in api["Resources"].values()
+        if resource["Type"] == "AWS::Lambda::Function"
+    }
+    variables = functions["stoa-account-deletion"]["Environment"]["Variables"]
+    assert variables["STOA_PROBE_EMAIL"] == "probe@test.stoaedu.ch"
+    assert "resolve:secretsmanager" in json.dumps(variables["STOA_PROBE_PASSWORD"])

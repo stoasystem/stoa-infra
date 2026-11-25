@@ -264,6 +264,10 @@ class ApiStack(Stack):
             resources=["*"],
         ))
         self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["lambda:ListVersionsByFunction"],
+            resources=[f"arn:aws:lambda:{self.region}:{self.account}:function:{resource_prefix}-api"],
+        ))
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
             actions=["logs:StartQuery"],
             resources=[
                 f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/lambda/{resource_prefix}-api:*",
@@ -846,6 +850,69 @@ class ApiStack(Stack):
                 ),
             ),
         )
+
+        # Card 134: the usage rollup and the synthetic probe run on this function,
+        # as the retention and sweep jobs above do. The probe signs in as its own
+        # student account; its password is a generated secret, set on the account
+        # once through the account's own password change.
+        if analytics_table is not None:
+            analytics_table.grant_read_write_data(self.account_deletion_function)
+            self.account_deletion_function.add_environment(
+                "ANALYTICS_TABLE_NAME", analytics_table.table_name
+            )
+            self.probe_password_secret = secretsmanager.Secret(
+                self,
+                "ProbePassword",
+                secret_name=f"{resource_prefix}/probe/password",
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    password_length=32, exclude_punctuation=True, require_each_included_type=True
+                ),
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            self.account_deletion_function.add_environment(
+                "STOA_PROBE_EMAIL", "probe@test.stoaedu.ch" if env_name == "production" else ""
+            )
+            self.account_deletion_function.add_environment(
+                "STOA_PROBE_PASSWORD", self.probe_password_secret.secret_value.unsafe_unwrap()
+            )
+            for schedule_id, name, description, expression, job in (
+                (
+                    "AnalyticsRollupSchedule",
+                    "analytics-rollup",
+                    "Fold yesterday's usage events into rollup rows.",
+                    "cron(15 1 * * ? *)",
+                    "analytics_rollup",
+                ),
+                (
+                    "SyntheticProbeSchedule",
+                    "synthetic-probe",
+                    "Walk the read-only paths signed in as the probe account.",
+                    "rate(5 minutes)",
+                    "synthetic_probe",
+                ),
+            ):
+                # No retries and no DLQ: a missed run is replaced by the next one, and
+                # a message here would page as an account-deletion failure.
+                scheduler.CfnSchedule(
+                    self,
+                    schedule_id,
+                    name=f"{resource_prefix}-{name}",
+                    group_name=f"{resource_prefix}-schedules",
+                    description=description,
+                    schedule_expression=expression,
+                    flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                        mode="OFF",
+                    ),
+                    target=scheduler.CfnSchedule.TargetProperty(
+                        arn=self.account_deletion_production_alias.function_arn,
+                        role_arn=account_deletion_scheduler_role.role_arn,
+                        input=json.dumps({"source": "stoa.scheduler", "job": job}),
+                        retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                            maximum_event_age_in_seconds=300,
+                            maximum_retry_attempts=0,
+                        ),
+                    ),
+                )
 
         conversation_generation_dlq = sqs.Queue(
             self,
