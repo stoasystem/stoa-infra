@@ -21,6 +21,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_logs as logs,
     aws_scheduler as scheduler,
+    aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
 
@@ -119,6 +120,7 @@ class ApiStack(Stack):
         images_bucket: s3.Bucket,
         reports_bucket: s3.Bucket,
         immutable_evidence_bucket: s3.Bucket,
+        analytics_table: dynamodb.ITable | None = None,
         env_name: str = "production",
         resource_prefix: str = "stoa",
         **kwargs,
@@ -222,6 +224,10 @@ class ApiStack(Stack):
                     # it falls back to the scan by itself. Deletions already
                     # accepted keep the path they were accepted under.
                     "ACCOUNT_DELETION_REGISTRY_PATH": "true",
+                    # stoasystem/stoa-backend#610, #624 and card 133: one numbers-only
+                    # log line per request with what it read, so each read fix is
+                    # measured on production rather than on a double.
+                    "DYNAMODB_READ_METERING": "true",
                 },
                 load_live_lambda_environment(f"{resource_prefix}-api", env_name=env_name),
                 env_name=env_name,
@@ -230,6 +236,48 @@ class ApiStack(Stack):
 
         # Grant permissions
         table.grant_read_write_data(self.api_function)
+
+        # Card 134: usage events go to their own table, and the console's health
+        # pages read CloudWatch metrics, alarms and the request logs.
+        if analytics_table is not None:
+            analytics_table.grant_read_write_data(self.api_function)
+            self.api_function.add_environment("ANALYTICS_TABLE_NAME", analytics_table.table_name)
+            # The key that turns a user id into the pseudonym stored with usage
+            # events. The template holds a dynamic reference, never the value.
+            self.analytics_pseudonym_secret = secretsmanager.Secret(
+                self,
+                "AnalyticsPseudonymKey",
+                secret_name=f"{resource_prefix}/analytics/pseudonym-key",
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    password_length=64, exclude_punctuation=True
+                ),
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            self.api_function.add_environment(
+                "ANALYTICS_PSEUDONYM_KEY",
+                self.analytics_pseudonym_secret.secret_value.unsafe_unwrap(),
+            )
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "cloudwatch:GetMetricData",
+                "cloudwatch:DescribeAlarms",
+                "cloudwatch:DescribeAlarmHistory",
+                "logs:GetQueryResults",
+                "logs:StopQuery",
+            ],
+            resources=["*"],
+        ))
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["lambda:ListVersionsByFunction"],
+            resources=[f"arn:aws:lambda:{self.region}:{self.account}:function:{resource_prefix}-api"],
+        ))
+        self.api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=["logs:StartQuery"],
+            resources=[
+                f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/lambda/{resource_prefix}-api:*",
+                f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/apigateway/{resource_prefix}-api/access:*",
+            ],
+        ))
         images_bucket.grant_read_write(self.api_function)
         self._grant_report_artifact_read_write(reports_bucket, self.api_function)
         self._grant_immutable_evidence_access(immutable_evidence_bucket, self.api_function)
@@ -463,6 +511,16 @@ class ApiStack(Stack):
         )
 
         table.grant_read_write_data(self.conversation_generation_function)
+        # Card 134: the worker records `ai_answered` when a reply completes.
+        if analytics_table is not None:
+            analytics_table.grant_read_write_data(self.conversation_generation_function)
+            self.conversation_generation_function.add_environment(
+                "ANALYTICS_TABLE_NAME", analytics_table.table_name
+            )
+            self.conversation_generation_function.add_environment(
+                "ANALYTICS_PSEUDONYM_KEY",
+                self.analytics_pseudonym_secret.secret_value.unsafe_unwrap(),
+            )
         # Reads the attachment text the request already extracted; never writes.
         images_bucket.grant_read(self.conversation_generation_function)
         # The name E21's switch reads (E22). Adding it publishes a new API
@@ -797,6 +855,69 @@ class ApiStack(Stack):
             ),
         )
 
+        # Card 134: the usage rollup and the synthetic probe run on this function,
+        # as the retention and sweep jobs above do. The probe signs in as its own
+        # student account; its password is a generated secret, set on the account
+        # once through the account's own password change.
+        if analytics_table is not None:
+            analytics_table.grant_read_write_data(self.account_deletion_function)
+            self.account_deletion_function.add_environment(
+                "ANALYTICS_TABLE_NAME", analytics_table.table_name
+            )
+            self.probe_password_secret = secretsmanager.Secret(
+                self,
+                "ProbePassword",
+                secret_name=f"{resource_prefix}/probe/password",
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    password_length=32, exclude_punctuation=True, require_each_included_type=True
+                ),
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            self.account_deletion_function.add_environment(
+                "STOA_PROBE_EMAIL", "probe@test.stoaedu.ch" if env_name == "production" else ""
+            )
+            self.account_deletion_function.add_environment(
+                "STOA_PROBE_PASSWORD", self.probe_password_secret.secret_value.unsafe_unwrap()
+            )
+            for schedule_id, name, description, expression, job in (
+                (
+                    "AnalyticsRollupSchedule",
+                    "analytics-rollup",
+                    "Fold yesterday's usage events into rollup rows.",
+                    "cron(15 1 * * ? *)",
+                    "analytics_rollup",
+                ),
+                (
+                    "SyntheticProbeSchedule",
+                    "synthetic-probe",
+                    "Walk the read-only paths signed in as the probe account.",
+                    "rate(5 minutes)",
+                    "synthetic_probe",
+                ),
+            ):
+                # No retries and no DLQ: a missed run is replaced by the next one, and
+                # a message here would page as an account-deletion failure.
+                scheduler.CfnSchedule(
+                    self,
+                    schedule_id,
+                    name=f"{resource_prefix}-{name}",
+                    group_name=f"{resource_prefix}-schedules",
+                    description=description,
+                    schedule_expression=expression,
+                    flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                        mode="OFF",
+                    ),
+                    target=scheduler.CfnSchedule.TargetProperty(
+                        arn=self.account_deletion_production_alias.function_arn,
+                        role_arn=account_deletion_scheduler_role.role_arn,
+                        input=json.dumps({"source": "stoa.scheduler", "job": job}),
+                        retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                            maximum_event_age_in_seconds=300,
+                            maximum_retry_attempts=0,
+                        ),
+                    ),
+                )
+
         conversation_generation_dlq = sqs.Queue(
             self,
             "ConversationGenerationDLQ",
@@ -1071,6 +1192,10 @@ class ApiStack(Stack):
             ("/auth/logout", [apigwv2.HttpMethod.POST]),
             ("/auth/invitations/claim", [apigwv2.HttpMethod.POST]),
             ("/analytics/events", [apigwv2.HttpMethod.POST]),
+            # Card 134: the error boundary reports a crash whether or not anyone
+            # is signed in. The handler keeps only route, a hashed message and a
+            # trimmed stack, and caps reports per source address.
+            ("/monitoring/frontend-errors", [apigwv2.HttpMethod.POST]),
             # Teacher onboarding reaches these before the candidate has any identity.
             # GET /teacher-applications is the reviewer queue and stays behind the
             # authorizer: granting it here would publish every pending candidacy.

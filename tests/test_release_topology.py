@@ -703,6 +703,8 @@ PUBLIC_ROUTE_KEYS = {
     "POST /auth/register",
     "POST /auth/reset-password",
     "POST /billing/webhooks/stripe",
+    # The error boundary reports whether or not anyone is signed in (card 134).
+    "POST /monitoring/frontend-errors",
     # The signed token in the query is the credential (stoa-backend#363).
     "POST /notifications/email-resubscribe",
     "POST /notifications/email-unsubscribe",
@@ -1386,6 +1388,7 @@ def test_app_py_wires_each_alarm_to_the_production_resource(
         )
         for alarm in _named_resources(monitoring, "AWS::CloudWatch::Alarm").values()
         if alarm["Properties"].get("Dimensions")
+        and not alarm["Properties"]["AlarmName"].startswith("stoa-feature-")
     }
     lambda_, queue = "AWS::Lambda::Function", "AWS::SQS::Queue"
     assert targets == {
@@ -1848,3 +1851,91 @@ def test_the_images_bucket_cleans_what_uploads_leave_and_keeps_old_attachments()
     assert all(rule["Status"] == "Enabled" for rule in rules.values())
     noncurrent = [rule for rule in rules.values() if "NoncurrentVersionExpiration" in rule]
     assert [rule.get("Prefix") for rule in noncurrent] == ["staging/"]
+
+
+def test_each_feature_pages_on_error_rate_and_latency(monkeypatch: Any, tmp_path: Path) -> None:
+    """Card 134: the console's health page reads these back by name prefix."""
+    from stacks.monitoring_stack import FEATURE_P95_LIMIT_MS
+
+    template = _monitoring_template(monkeypatch, tmp_path)
+    alarms = _alarms(template)
+    for feature, limit in FEATURE_P95_LIMIT_MS.items():
+        latency = alarms[f"stoa-feature-{feature}-latency"]
+        assert latency["Namespace"] == "Stoa/Features"
+        assert latency["Dimensions"] == [{"Name": "Feature", "Value": feature}]
+        assert latency["ExtendedStatistic"] == "p95"
+        assert latency["Threshold"] == limit
+        rate = alarms[f"stoa-feature-{feature}-error-rate"]
+        assert rate["Threshold"] == 2
+        assert rate["TreatMissingData"] == "notBreaching"
+        assert any("requests >= 20" in str(m.get("Expression", "")) for m in rate["Metrics"])
+
+
+def test_budget_mails_stoa_alerts(monkeypatch: Any, tmp_path: Path) -> None:
+    template = _monitoring_template(monkeypatch, tmp_path)
+    [budget] = _named_resources(template, "AWS::Budgets::Budget").values()
+    kinds = {
+        entry["Notification"]["NotificationType"]
+        for entry in budget["Properties"]["NotificationsWithSubscribers"]
+    }
+    assert kinds == {"ACTUAL", "FORECASTED"}
+
+
+
+def test_pseudonym_key_is_a_dynamic_reference_not_a_value(monkeypatch: Any, tmp_path: Path) -> None:
+    """Card 134: the API template must not carry the analytics pseudonym key itself."""
+    dist_dir = tmp_path / "lambda-dist"
+    dist_dir.mkdir()
+    monkeypatch.setattr(
+        "stacks.api_stack.verify_lambda_dist",
+        lambda: LambdaDistAsset(path=dist_dir, asset_hash="0" * 64),
+    )
+    monkeypatch.delenv("STOA_LIVE_LAMBDA_ENV_FILE", raising=False)
+    monkeypatch.delenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", raising=False)
+    app_globals = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "app.py"), run_name="__main__"
+    )
+    out_dir = Path(app_globals["app"].synth().directory)
+    api = json.loads((out_dir / "StoaApiStack.template.json").read_text())
+    functions = {
+        resource["Properties"].get("FunctionName"): resource["Properties"]
+        for resource in api["Resources"].values()
+        if resource["Type"] == "AWS::Lambda::Function"
+    }
+    for name in ("stoa-api", WORKER):
+        value = functions[name]["Environment"]["Variables"]["ANALYTICS_PSEUDONYM_KEY"]
+        assert "resolve:secretsmanager" in json.dumps(value), name
+
+
+def test_card_134_jobs_run_on_the_ops_function_without_retries(monkeypatch: Any, tmp_path: Path) -> None:
+    dist_dir = tmp_path / "lambda-dist"
+    dist_dir.mkdir()
+    monkeypatch.setattr(
+        "stacks.api_stack.verify_lambda_dist",
+        lambda: LambdaDistAsset(path=dist_dir, asset_hash="0" * 64),
+    )
+    monkeypatch.delenv("STOA_LIVE_LAMBDA_ENV_FILE", raising=False)
+    monkeypatch.delenv("STOA_REQUIRE_LIVE_LAMBDA_ENV", raising=False)
+    app_globals = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "app.py"), run_name="__main__"
+    )
+    out_dir = Path(app_globals["app"].synth().directory)
+    api = json.loads((out_dir / "StoaApiStack.template.json").read_text())
+    schedules = {
+        resource["Properties"]["Name"]: resource["Properties"]
+        for resource in api["Resources"].values()
+        if resource["Type"] == "AWS::Scheduler::Schedule"
+    }
+    for name, job in (("stoa-analytics-rollup", "analytics_rollup"), ("stoa-synthetic-probe", "synthetic_probe")):
+        target = schedules[name]["Target"]
+        assert json.loads(target["Input"])["job"] == job
+        assert target["RetryPolicy"]["MaximumRetryAttempts"] == 0
+        assert "DeadLetterConfig" not in target
+    functions = {
+        resource["Properties"].get("FunctionName"): resource["Properties"]
+        for resource in api["Resources"].values()
+        if resource["Type"] == "AWS::Lambda::Function"
+    }
+    variables = functions["stoa-account-deletion"]["Environment"]["Variables"]
+    assert variables["STOA_PROBE_EMAIL"] == "probe@test.stoaedu.ch"
+    assert "resolve:secretsmanager" in json.dumps(variables["STOA_PROBE_PASSWORD"])

@@ -22,9 +22,31 @@ def _table() -> dict[str, Any]:
         resource
         for resource in template["Resources"].values()
         if resource["Type"] == "AWS::DynamoDB::Table"
+        and resource["Properties"]["TableName"] == "stoa-main"
     ]
     assert len(tables) == 1
     return tables[0]["Properties"]
+
+
+def test_analytics_table_is_its_own_table_with_ttl() -> None:
+    """Card 134: usage events never land in stoa-main."""
+    app = cdk.App()
+    stack = DatabaseStack(
+        app,
+        "TestDatabase",
+        env=cdk.Environment(account="111122223333", region="eu-central-2"),
+    )
+    template = Template.from_stack(stack).to_json()
+    analytics = [
+        resource["Properties"]
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::DynamoDB::Table"
+        and resource["Properties"]["TableName"] == "stoa-analytics"
+    ]
+    assert len(analytics) == 1
+    assert analytics[0]["TimeToLiveSpecification"] == {"AttributeName": "ttl", "Enabled": True}
+    assert analytics[0]["BillingMode"] == "PAY_PER_REQUEST"
+    assert "GlobalSecondaryIndexes" not in analytics[0]
 
 
 def test_sweep_pending_index_is_keyed_by_bucket_and_due_time() -> None:
