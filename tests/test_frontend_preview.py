@@ -180,7 +180,7 @@ FRONTEND_POLICY = (
     "https://stoa-images-562923011260.s3.eu-central-2.amazonaws.com "
     "https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net https://prod-ks.pluot.blue "
     "wss://*.daily.co wss://*.dailywebrtc.com wss://*.dailywebrtc.net; "
-    "frame-src https://*.trycloudflare.com; "
+    "frame-src https://board.stoaedu.ch; "
     "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; "
     "form-action 'self'; frame-ancestors 'none'"
 )
