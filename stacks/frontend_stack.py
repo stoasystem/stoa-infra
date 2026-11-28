@@ -52,9 +52,8 @@ CONTENT_SECURITY_POLICY = "; ".join([
     " https://*.daily.co https://*.dailywebrtc.com https://*.dailywebrtc.net https://prod-ks.pluot.blue"
     " wss://*.daily.co wss://*.dailywebrtc.com wss://*.dailywebrtc.net",
     # The virtual classroom (stoa-frontend#696): its WBO whiteboard is framed
-    # from a Cloudflare quick tunnel during the demo phase, whose host changes
-    # on every restart, so the domain is named; Daily is its voice.
-    "frame-src https://*.trycloudflare.com",
+    # from board.stoaedu.ch (Render, behind a Route 53 CNAME); Daily is its voice.
+    "frame-src https://board.stoaedu.ch",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
